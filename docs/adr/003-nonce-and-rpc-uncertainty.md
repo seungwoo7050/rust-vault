@@ -30,6 +30,8 @@
                                         └─ Indeterminate ─▶ Unknown ─┤
                                                                    ├─ 영수증, 확정 수 N, status 0 ──▶ Failed (wd:fee + wd:release)
                                                                    └─ 내 nonce를 다른 tx가 씀, 또는 기한 초과 ──▶ NeedsReview (홀드 유지)
+                                                                                                        │
+                                              조회 루틴은 NeedsReview에도 계속 돈다. 영수증이 나오면 ────┘ 위와 같이 Confirmed / Failed
    ```
 
    - `Held`: 요청 저장과 홀드 분개(`wd:hold:{request_id}`)를 한 트랜잭션에서. 잔액이 모자라면 요청은 `Rejected`이고 분개는 없다. 같은 `request_id`가 다시 오면 기존 요청을 돌려준다(I2).
@@ -44,13 +46,15 @@
    - 영수증이 없고 주소의 확정된 nonce가 내 nonce 이하면 아직 안 들어간 것이다. 같은 raw tx를 다시 보낸다.
    - 영수증이 없는데 확정된 nonce가 내 nonce를 지났으면 다른 tx가 그 nonce를 썼다(F5: 외부에서 같은 키 사용, 또는 할당 버그). 내 tx는 이제 들어갈 수 없지만, 그 다른 tx가 같은 수취인에게 지급했을 수도 있다. 자동으로 홀드를 풀지 않고 `NeedsReview`.
    - 정해진 기한(설정값) 안에 결론이 안 나면 `NeedsReview`. 홀드는 유지한다. 자동 `Failed`는 없다.
+   - `NeedsReview`는 "사람이 봐야 한다"는 표시이지 결론이 아니다. 조회 루틴은 `NeedsReview`에서도 계속 돌고, 영수증이 확정 수 N에 이르면 위와 같이 `Confirmed`(지급 분개) 또는 `Failed`로 간다. 시간이 지났다는 이유만으로는 어떤 상태도 `Failed`가 되지 않는다(I6).
+   - 기한은 `Clock` trait로 잰다. 테스트는 가짜 시계를 앞으로 돌려 기한 전후를 만든다.
 4. **재전송은 같은 바이트만.** 재시작 루틴, `Unknown`, reorg 뒤 재전송 모두 저장된 raw tx를 그대로 보낸다. 다시 서명하는 코드 경로를 두지 않는다. 서명 함수는 `Held → Signed` 전이에서만 부른다.
 5. **nonce 할당.** `wallet_nonces(address, next_nonce)` 행을 `SELECT … FOR UPDATE`로 잠그고 할당·증가한다. 처음 한 번만 체인의 확정 nonce로 초기화하고, 그 뒤로는 DB가 원본이다. 출금 주소의 키를 이 시스템 밖에서 쓰지 않는다는 것이 운영 전제다(어기면 3의 `NeedsReview`로 드러난다).
 6. **재시작 루틴.** `Signed`는 다시 보내고, `Sent`·`Unknown`은 조회 루틴에 넣는다. 전송 직후 상태를 쓰기 전에 죽었으면 `Signed`로 남아 같은 바이트가 다시 나가고, 노드는 "already known"을 돌려준다(I5).
 
 ## 검증
 
-[SYSTEM_INVARIANTS](../SYSTEM_INVARIANTS.md#증명-테스트)의 T1.3, T2.4, T5.3, T6.1–T6.4, T6.6(05-withdrawal). 가짜 체인이 "요청은 반영하고 응답만 버림", 조회 타임아웃, 외부 tx의 nonce 선점, 영수증이 생겼다 사라지는 reorg를 주입한다. T6.6은 이를 무작위로 섞어 출금 요청마다 체인 지급 수 ≤ 1인지 본다.
+[SYSTEM_INVARIANTS](../SYSTEM_INVARIANTS.md#증명-테스트)의 T1.3, T2.4, T5.3, T6.1–T6.4, T6.6(05-withdrawal). T6.2는 기한 전과 기한 뒤(`NeedsReview`를 거쳐) 모두 `Confirmed`로 끝나는지 본다. 가짜 체인이 "요청은 반영하고 응답만 버림", 조회 타임아웃, 외부 tx의 nonce 선점, 영수증이 생겼다 사라지는 reorg를 주입한다. T6.6은 이를 무작위로 섞어 출금 요청마다 체인 지급 수 ≤ 1인지 본다.
 
 ## 바꿀 신호
 
