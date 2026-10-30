@@ -26,6 +26,8 @@ fn crash_at_each_injection_point_matches_clean_run() {
                 .unwrap_or_else(|e| panic!("시나리오 {n} 기준 실행: {e}"));
             let want: usize = clean.hits.values().sum();
             let mut combos = 0;
+            // 장애 실행 쪽에서 센 "실제로 낸 종료" 수의 합
+            let mut fired = 0;
             for (&point, &count) in &clean.hits {
                 for k in 1..=count {
                     let got = run(seq, Some((point, k, Injected::Crash)))
@@ -40,13 +42,14 @@ fn crash_at_each_injection_point_matches_clean_run() {
                         &got,
                         &format!("시나리오 {n} {point} {k}번째에서 종료 후 재시작"),
                     );
+                    fired += got.fired;
                     combos += 1;
                 }
             }
             assert!(combos > 0, "시나리오 {n}: 돈 조합이 없다");
             assert_eq!(
-                combos, want,
-                "시나리오 {n}: 조합 수 = 기준 실행의 지점별 통과 횟수 합"
+                fired, want,
+                "시나리오 {n}: 실제로 낸 종료 수의 합 = 기준 실행의 지점별 통과 횟수 합"
             );
             total += combos;
         }
@@ -80,6 +83,10 @@ fn transient_db_error_leaves_no_partial_state() {
                         .await
                         .unwrap_or_else(|e| panic!("시나리오 {n} {point} {k}번째 일시 오류: {e}"));
                     assert_eq!(got.restarts, 0, "시나리오 {n} {point} {k}번째: 재시작");
+                    assert_eq!(
+                        got.fired, 1,
+                        "시나리오 {n} {point} {k}번째: 주입한 일시 오류가 한 번 나야 한다"
+                    );
                     // 그 블록 처리를 한 번 더 했다(일시 오류 뒤 같은 step을 다시 함)
                     assert_eq!(
                         got.hits.get(&point).copied().unwrap_or(0),
@@ -158,6 +165,8 @@ struct Run {
     hits: BTreeMap<FaultPoint, usize>,
     /// 주입된 종료 뒤 스캐너를 새로 만든 횟수
     restarts: usize,
+    /// 장애 계획이 실제로 장애를 낸 횟수
+    fired: usize,
 }
 
 /// 비교하는 상태: 분개 키, 잔액, 커서, `deposits`, `block_headers`, 정지 여부.
@@ -233,6 +242,7 @@ async fn drive(
         states,
         hits: env.faults.hits(),
         restarts,
+        fired: env.faults.fired(),
     })
 }
 

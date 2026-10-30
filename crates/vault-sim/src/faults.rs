@@ -16,6 +16,8 @@ struct Inner {
     hits: BTreeMap<FaultPoint, usize>,
     /// (지점, 몇 번째 통과(1부터)) → 장애
     at: BTreeMap<(FaultPoint, usize), Injected>,
+    /// 실제로 장애를 낸 횟수
+    fired: usize,
 }
 
 impl FaultPlan {
@@ -46,6 +48,11 @@ impl FaultPlan {
         );
     }
 
+    /// 지금까지 실제로 장애를 낸 횟수(걸어 두고 아직 통과하지 않은 것은 세지 않는다).
+    pub fn fired(&self) -> usize {
+        self.0.lock().unwrap().fired
+    }
+
     /// 지금까지의 지점별 통과 횟수.
     pub fn hits(&self) -> BTreeMap<FaultPoint, usize> {
         self.0.lock().unwrap().hits.clone()
@@ -61,7 +68,10 @@ impl Faults for FaultPlan {
             *n
         };
         match g.at.remove(&(point, k)) {
-            Some(fault) => Err(fault),
+            Some(fault) => {
+                g.fired += 1;
+                Err(fault)
+            }
             None => Ok(()),
         }
     }
