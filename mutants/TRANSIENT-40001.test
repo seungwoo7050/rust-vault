@@ -1,0 +1,2 @@
+# 직렬화 실패(40001)를 일시 오류 분류에서 빼는 변형. 표 밖(커밋 시점 40001이 재시도되지 않는다). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test deposit -- serialization_failure_at_commit_is_retried --exact

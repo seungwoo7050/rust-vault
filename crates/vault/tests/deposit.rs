@@ -1,5 +1,5 @@
 //! 불변조건 표 밖의 입금 스캐너 테스트(`--features db`). 정지 유지, 되감기 중 조회 실패, 입금이 아닌 tx,
-//! 고아였던 블록의 재등장, 영구 DB 오류와 재시도 한도를 넘긴 일시 오류.
+//! 고아였던 블록의 재등장, 영구 DB 오류(INSERT 시점·커밋 시점)와 재시도 한도를 넘긴 일시 오류, 커밋 시점 직렬화 실패.
 
 #[path = "support/scan.rs"]
 mod scan;
@@ -7,7 +7,7 @@ mod scan;
 use vault::chain::BlockNumber;
 use vault::deposit::{ScanError, Step};
 use vault::ledger::AccountKey;
-use vault::store::{FaultPoint, Injected};
+use vault::store::{FaultPoint, Injected, Site};
 use vault_sim::chain::{Call, Fault, failed_transfer, transfer};
 
 use scan::Env;
@@ -323,6 +323,117 @@ async fn transient_error_beyond_retries_stops_before_block() {
     scanner.run_until_idle().await.unwrap();
     assert_eq!(env.cursor().await.hash, b1);
     assert_eq!(env.entries("dep:pending:").await, 1);
+    assert_eq!(env.balance(&AccountKey::pending_deposit(1)).await, 100);
+    env.db.drop_db().await;
+}
+
+/// 테스트 DB에만 거는 지연 제약 트리거: `deposits` 행이 들어간 트랜잭션의 커밋 때 `body`를 실행한다.
+async fn deferred_trigger_on_deposits(env: &Env, body: &str) {
+    let pool = &env.db.pool;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE FUNCTION test_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN {body} RETURN NULL; END $$"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE CONSTRAINT TRIGGER test_at_commit AFTER INSERT ON deposits
+           DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION test_at_commit()",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn db_code(got: &Result<(), ScanError>) -> Option<String> {
+    match got {
+        Err(ScanError::Db(sqlx::Error::Database(e))) => e.code().map(|c| c.into_owned()),
+        _ => None,
+    }
+}
+
+/// (아) 커밋 시점의 영구 DB 오류(지연 제약 트리거의 23514)는 커밋이 거부된 것이다. 재시도하지 않고 그 DB 오류로 끝나며,
+/// 커서·헤더·분개·`deposits`가 그 블록 앞 그대로다. 다시 스캔해도 같은 오류로 끝나고 그 블록을 지나가지 않는다.
+#[tokio::test]
+async fn permanent_error_at_commit_is_not_retried() {
+    let env = Env::new().await;
+    let chain = &env.chain;
+    chain.mine_canonical(chain.genesis().hash, vec![transfer(1, scan::addr(1), 100)]);
+    deferred_trigger_on_deposits(
+        &env,
+        "RAISE EXCEPTION 'rejected at commit' USING ERRCODE = '23514';",
+    )
+    .await;
+    let mut scanner = env.scanner().await;
+    let headers = env.headers().await;
+
+    for attempt in 1..=2usize {
+        let got = scanner.run_until_idle().await;
+        assert_eq!(
+            db_code(&got).as_deref(),
+            Some("23514"),
+            "{attempt}번째 스캔: 커밋 시점 제약 위반 DB 오류로 끝나야 한다: {got:?}"
+        );
+        let hits = env.faults.hits();
+        assert_eq!(
+            hits.get(&FaultPoint::BeforeCommit(Site::Block)).copied(),
+            Some(attempt),
+            "{attempt}번째 스캔: 스캔마다 커밋을 한 번만 시도한다(재시도 없음)"
+        );
+        assert_eq!(
+            hits.get(&FaultPoint::AfterCommit(Site::Block)),
+            None,
+            "커밋이 된 것으로 보면 안 된다"
+        );
+        assert_eq!(
+            env.cursor().await.hash,
+            chain.genesis().hash,
+            "커서가 움직였다"
+        );
+        assert_eq!(env.headers().await, headers, "헤더가 바뀌었다");
+        assert!(env.keys().await.is_empty(), "분개가 남았다");
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM deposits")
+            .fetch_one(&mut *env.conn().await)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "deposits 행이 남았다");
+    }
+    env.db.drop_db().await;
+}
+
+/// (자) 커밋 시점의 직렬화 실패(40001)는 일시 오류다. 커밋은 거부됐으므로 `run_until_idle`이 그 블록을 처음부터 다시 하고,
+/// 입금이 정확히 한 번 반영된다.
+#[tokio::test]
+async fn serialization_failure_at_commit_is_retried() {
+    let env = Env::new().await;
+    let chain = &env.chain;
+    let b1 = chain.mine_canonical(chain.genesis().hash, vec![transfer(1, scan::addr(1), 100)]);
+    // 시퀀스는 롤백되지 않으므로 처음 한 번만 실패한다
+    sqlx::query("CREATE SEQUENCE test_fail_once")
+        .execute(&env.db.pool)
+        .await
+        .unwrap();
+    deferred_trigger_on_deposits(
+        &env,
+        "IF nextval('test_fail_once') = 1 THEN \
+           RAISE EXCEPTION 'could not serialize' USING ERRCODE = '40001'; END IF;",
+    )
+    .await;
+    let mut scanner = env.scanner().await;
+
+    scanner.run_until_idle().await.unwrap();
+    let hits = env.faults.hits();
+    assert_eq!(
+        hits.get(&FaultPoint::BeforeCommit(Site::Block)).copied(),
+        Some(2),
+        "거부된 커밋 1번 + 재시도 1번"
+    );
+    assert_eq!(
+        hits.get(&FaultPoint::AfterCommit(Site::Block)).copied(),
+        Some(1)
+    );
+    assert_eq!(env.cursor().await.hash, b1);
+    assert_eq!(env.entries("dep:pending:").await, 1, "잠정 입금 분개 수");
     assert_eq!(env.balance(&AccountKey::pending_deposit(1)).await, 100);
     env.db.drop_db().await;
 }
