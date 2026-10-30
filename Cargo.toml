@@ -13,3 +13,5 @@ publish = false
 [workspace.dependencies]
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+sha2 = "0.10"
+proptest = "1"

@@ -10,8 +10,11 @@ publish.workspace = true
 db = []
 
 [dependencies]
+sha2.workspace = true
 sqlx.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 tokio.workspace = true
 vault-sim = { path = "../vault-sim" }
+
