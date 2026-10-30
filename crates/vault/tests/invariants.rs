@@ -3,6 +3,8 @@
 //! 표와 이 파일들의 일치는 scripts/harness/check-invariant-tests.sh가 검사한다.
 //! DB가 있어야 돌므로 `--features db`일 때만 빌드한다(crates/vault/Cargo.toml의 [[test]]).
 
+#[path = "support/history.rs"]
+mod history;
 #[path = "support/model.rs"]
 mod model;
 #[path = "support/scan.rs"]

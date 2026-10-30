@@ -17,6 +17,8 @@ pub const N: u64 = 3;
 pub const CHAIN_ID: u64 = 1;
 /// 입금 주소를 등록하는 사용자. 사용자 `u`의 주소는 `addr(u)`다
 pub const USERS: [i64; 2] = [1, 2];
+/// `run_until_idle`이 일시 오류 뒤 다시 하는 최대 횟수(연속).
+pub const RETRIES: u32 = 3;
 
 pub fn addr(user: i64) -> Address {
     sim::address(user as u64)
@@ -55,6 +57,7 @@ impl Env {
             chain_id: CHAIN_ID,
             confirmations: N,
             start: self.chain.genesis(),
+            transient_retries: RETRIES,
         }
     }
 

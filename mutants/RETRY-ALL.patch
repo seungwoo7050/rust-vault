@@ -1,0 +1,13 @@
+--- a/crates/vault/src/store.rs
++++ b/crates/vault/src/store.rs
+@@ -126,6 +126,10 @@
+ /// 일시 오류인가: 연결 오류(I/O, SQLSTATE `08xxx`), 직렬화 실패(`40001`), 교착(`40P01`), 풀 타임아웃.
+ /// 일시 오류는 작업 단위 전체를 다시 하면 된다. 그 밖의 오류(제약 위반 등)는 다시 해도 같으므로 재시도하지 않는다.
+ pub fn is_transient(e: &sqlx::Error) -> bool {
++    // 모든 DB 오류를 일시 오류로 본다
++    if !matches!(e, sqlx::Error::PoolClosed) {
++        return true;
++    }
+     match e {
+         sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut => true,
+         sqlx::Error::Database(db) => db

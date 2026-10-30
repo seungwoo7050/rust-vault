@@ -1,0 +1,11 @@
+--- a/crates/vault/src/store.rs
++++ b/crates/vault/src/store.rs
+@@ -130,7 +130,7 @@
+         sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut => true,
+         sqlx::Error::Database(db) => db
+             .code()
+-            .is_some_and(|c| c == "40001" || c == "40P01" || c.starts_with("08")),
++            .is_some_and(|c| c == "40P01" || c.starts_with("08")),
+         _ => false,
+     }
+ }
