@@ -1,10 +1,11 @@
 --- a/crates/vault/src/deposit.rs
 +++ b/crates/vault/src/deposit.rs
-@@ -300,6 +300,11 @@
+@@ -301,6 +301,12 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
  
      /// 블록 하나를 한 트랜잭션으로 처리한다(ADR-002 결정 3).
      async fn apply_block(&mut self, block: Block) -> Result<Step, ScanError> {
 +        let mut cur = self.pool.begin().await?;
++        save_header(&mut cur, &block.header).await?;
 +        advance_cursor(&mut cur, &block.header).await?;
 +        store::commit(cur, &self.faults, Site::Block)
 +            .await
@@ -12,7 +13,7 @@
          let mut tx = self.pool.begin().await?;
          if save_header(&mut tx, &block.header).await? == Saved::WasOrphaned {
              // 한 번 고아로 표시한 블록이 다시 canonical이 됐다(A → B → A, ADR-002 결정 10).
-@@ -325,7 +330,6 @@
+@@ -326,7 +332,6 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
          )
          .await?;
          self.inject(FaultPoint::BlockEntriesWritten)?;
