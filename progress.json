@@ -11,13 +11,29 @@
   },
   "current": {
     "branch": "00-charter",
-    "stage": "brief",
-    "note": "다음 세션: 0절 루틴 → 00-charter 브리프 확정 → 문서 작성 → 평가"
+    "stage": "stopped",
+    "note": "완료 기준 3 두 번 연속 실패로 멈춤(ORCHESTRATION 5절). 문서 커밋 959677c. 2차 평가의 고칠 것 6건은 interventions.md 마지막 행과 사람 보고에 있음. 사람 답을 받으면 고치고 3차 평가"
   },
-  "branches": {},
+  "branches": {
+    "00-charter": {
+      "commits": [
+        "80c0511",
+        "959677c"
+      ],
+      "eval": [
+        "1차 실패(기준 3, 7건)",
+        "2차 실패(기준 3, 6건)"
+      ],
+      "verify": "코드 없음, check-public 통과(8개 파일)"
+    }
+  },
   "blocked": [],
   "push_policy": "로컬 커밋만. 원격 저장소 생성과 푸시는 사람에게 묻는다.",
-  "needs_human": [],
-  "harness_gaps": [],
+  "needs_human": [
+    "개발 원칙 7개의 원문이 기록에 없다. 받으면 docs/PRINCIPLES.md로 더한다(출처: 사람 설계)"
+  ],
+  "harness_gaps": [
+    "테스트 표에 단언·가리는 장치 열이 없어 변형 판정이 문서 추론에 기댄다(interventions 2026-10-30)"
+  ],
   "deferred": []
 }
