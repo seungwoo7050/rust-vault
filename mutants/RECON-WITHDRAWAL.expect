@@ -1,0 +1,2 @@
+# RECON-WITHDRAWAL: Confirmed 출금 검증을 건너뛰면 WithdrawalMismatch 단언이 깨져야 한다
+WithdrawalMismatch 불일치를 찾아야 한다

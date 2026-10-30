@@ -1,0 +1,2 @@
+# 출금 핫월렛의 온체인 잔액 대 원장 잔액 비교를 건너뛰는 변형(RECON-BALANCE). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test recon -- detects_hot_wallet_balance_discrepancy --exact

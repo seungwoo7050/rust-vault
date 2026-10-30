@@ -1,0 +1,13 @@
+--- a/crates/vault/src/recon.rs
++++ b/crates/vault/src/recon.rs
+@@ -770,10 +770,5 @@ async fn check_withdrawals<C: ChainClient>(
+             Status::Confirmed => {
+                 let Some((from, nonce, raw, hash)) = signed else {
+-                    out.push(Discrepancy::WithdrawalMismatch {
+-                        request_id: w.request_id,
+-                        tx_hash: None,
+-                        reason: "confirmed withdrawal missing signed_txs row".into(),
+-                    });
+                     continue;
+                 };
+                 if !raw_matches(raw, *hash, *from, *nonce, to, amount) {
