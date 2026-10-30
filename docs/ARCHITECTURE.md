@@ -26,7 +26,7 @@
 | crate | 모듈 | 책임 | 브랜치 |
 | --- | --- | --- | --- |
 | `vault` | `ledger` | 분개 검증·기록, 멱등 키, 잔액 조회. 스스로 커밋하지 않고 받은 트랜잭션 안에서만 쓴다 | 02 |
-| | `store` | 연결 풀, 마이그레이션, 트랜잭션 경계, 장애 주입 자리(`Faults` trait, 운영 기본값 `NoFaults`) | 02, 03, 04 |
+| | `store` | 연결 풀, 마이그레이션, 트랜잭션 경계(커밋 도우미 `commit`), 장애 주입 자리(`Faults` trait와 `FaultPoint`, 운영 기본값 `NoFaults`), 일시 DB 오류 분류 | 02, 03, 04 |
 | | `chain` | `ChainClient` trait, `RpcOutcome { Ok, Definite, Indeterminate }`, 블록·영수증·tx 타입 | 03 |
 | | `deposit` | 스캐너: 커서, 블록 헤더 저장, reorg 감지·되감기, 잠정 입금·확정 | 03 |
 | | `withdrawal` | 출금 상태 기계, nonce 할당, 서명 tx 저장, 재전송·조회 루틴 | 05 |
@@ -76,4 +76,6 @@
 
 **출금(05)** 요청 → 홀드 트랜잭션 → 서명 트랜잭션(nonce·raw tx 저장) → 커밋 뒤 전송 → `Sent`/`Unknown` → 조회 루틴 → `Confirmed`/`Failed`/`NeedsReview`. 자세한 규칙은 [ADR-003](adr/003-nonce-and-rpc-uncertainty.md).
 
-**재시작(04)** DB에서 커서와 미완료 출금을 읽는다. 커서 다음 블록부터 스캔하고, `Signed`는 같은 raw tx를 다시 보내고, `Sent`·`Unknown`·`NeedsReview`는 조회 루틴에 넣는다. 메모리에서 이어받는 것은 없다.
+**재시작(04)** 재시작은 DB를 뺀 모든 객체를 새로 만드는 것이다(`Scanner::new`). 메모리에서 이어받는 것은 없다. 스캐너는 DB에서 커서·헤더·입금·정지 여부를 읽고 커서 다음 블록부터 스캔한다. 커밋 전에 죽은 블록의 쓰기는 트랜잭션과 함께 사라지고, 커밋 뒤에 죽었으면 커서가 이미 그 블록이다(T5.1). 출금(05): 미완료 출금을 DB에서 읽어 `Signed`는 같은 raw tx를 다시 보내고, `Sent`·`Unknown`·`NeedsReview`는 조회 루틴에 넣는다.
+
+**일시 DB 오류(04)** 연결 오류(I/O, SQLSTATE `08xxx`), 직렬화 실패(`40001`), 교착(`40P01`), 풀 타임아웃은 `ScanError::Transient`다. 열린 트랜잭션은 버리고, `run_until_idle`이 재시작 없이 같은 step을 다시 한다(연속 `ScanConfig::transient_retries`번까지, 넘으면 그 오류를 돌려준다). 다시 하는 step은 DB에서 커서를 다시 읽고 시작하고, 커밋 결과를 모르는 블록이 있으면 그 블록을 다시 처리한다(T5.2). 그 밖의 DB 오류(제약 위반 등)는 다시 해도 같으므로 재시도하지 않고 돌려준다. 블록을 건너뛰지 않으므로 커서는 그 블록 앞에 머문다. 표 밖 테스트(`crates/vault/tests/deposit.rs`): 영구 DB 오류는 한 번만 시도하고 상태가 그 블록 앞 그대로다(변형 `mutants/RETRY-ALL`: 모든 DB 오류를 재시도로 분류), 재시도 한도를 넘긴 일시 오류도 상태가 그 블록 앞 그대로다.

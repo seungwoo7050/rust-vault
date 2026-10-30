@@ -1,5 +1,5 @@
 //! 불변조건 표 밖의 입금 스캐너 테스트(`--features db`). 정지 유지, 되감기 중 조회 실패, 입금이 아닌 tx,
-//! 고아였던 블록의 재등장.
+//! 고아였던 블록의 재등장, 영구 DB 오류와 재시도 한도를 넘긴 일시 오류.
 
 #[path = "support/scan.rs"]
 mod scan;
@@ -7,6 +7,7 @@ mod scan;
 use vault::chain::BlockNumber;
 use vault::deposit::{ScanError, Step};
 use vault::ledger::AccountKey;
+use vault::store::{FaultPoint, Injected};
 use vault_sim::chain::{Call, Fault, failed_transfer, transfer};
 
 use scan::Env;
@@ -233,5 +234,95 @@ async fn orphaned_empty_block_coming_back_continues() {
     assert_eq!(env.balance(&AccountKey::user(1)).await, 100);
     assert_eq!(env.balance(&AccountKey::pending_deposit(1)).await, 0);
     assert_eq!(env.trial_balance().await, 0);
+    env.db.drop_db().await;
+}
+
+/// (바) 영구 DB 오류(제약 위반)는 다시 해도 같으므로 재시도하지 않는다. 한 번만 시도하고 그 DB 오류로 끝나며,
+/// 그 블록을 건너뛰지 않는다: 커서·헤더·원장·`deposits`가 그 블록 앞 그대로다.
+#[tokio::test]
+async fn permanent_db_error_is_not_retried() {
+    let env = Env::new().await;
+    let chain = &env.chain;
+    chain.mine_canonical(chain.genesis().hash, vec![transfer(1, scan::addr(1), 600)]);
+    // 영구 오류 주입: 이 입금 행을 거부하는 CHECK 제약(SQLSTATE 23514)을 테스트 DB에만 건다
+    sqlx::query("ALTER TABLE deposits ADD CONSTRAINT test_reject_large CHECK (amount < 500)")
+        .execute(&env.db.pool)
+        .await
+        .unwrap();
+    let mut scanner = env.scanner().await;
+    let headers = env.headers().await;
+
+    let got = scanner.run_until_idle().await;
+    let code = match &got {
+        Err(ScanError::Db(sqlx::Error::Database(e))) => e.code().map(|c| c.into_owned()),
+        _ => None,
+    };
+    assert_eq!(
+        code.as_deref(),
+        Some("23514"),
+        "제약 위반 DB 오류로 끝나야 한다: {got:?}"
+    );
+    assert_eq!(
+        env.faults.hits().get(&FaultPoint::BlockFetched).copied(),
+        Some(1),
+        "영구 오류는 다시 시도하지 않는다(블록 수신 1번)"
+    );
+    assert_eq!(
+        env.cursor().await.hash,
+        chain.genesis().hash,
+        "커서가 움직였다"
+    );
+    assert_eq!(env.headers().await, headers, "헤더가 바뀌었다");
+    assert!(env.keys().await.is_empty(), "분개가 남았다");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM deposits")
+        .fetch_one(&mut *env.conn().await)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "deposits 행이 남았다");
+    env.db.drop_db().await;
+}
+
+/// (사) 재시도 한도(`transient_retries`)를 넘긴 일시 오류는 그 오류로 끝나고, 상태는 그 블록 앞 그대로다.
+/// 장애가 걷힌 뒤 다시 스캔하면 그 블록의 입금이 한 번 반영된다.
+#[tokio::test]
+async fn transient_error_beyond_retries_stops_before_block() {
+    let env = Env::new().await;
+    let chain = &env.chain;
+    let tx = transfer(1, scan::addr(1), 100);
+    let b1 = chain.mine_canonical(chain.genesis().hash, vec![tx]);
+    let tries = scan::RETRIES as usize + 1;
+    env.faults
+        .fail_next(FaultPoint::BlockEntriesWritten, tries, Injected::Transient);
+    let mut scanner = env.scanner().await;
+    let headers = env.headers().await;
+
+    let got = scanner.run_until_idle().await;
+    assert!(matches!(got, Err(ScanError::Transient(_))), "{got:?}");
+    assert_eq!(
+        env.faults
+            .hits()
+            .get(&FaultPoint::BlockEntriesWritten)
+            .copied(),
+        Some(tries),
+        "처음 1번 + 재시도 {}번",
+        scan::RETRIES
+    );
+    assert_eq!(
+        env.cursor().await.hash,
+        chain.genesis().hash,
+        "커서가 움직였다"
+    );
+    assert_eq!(env.headers().await, headers, "헤더가 바뀌었다");
+    assert!(env.keys().await.is_empty(), "분개가 남았다");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM deposits")
+        .fetch_one(&mut *env.conn().await)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "deposits 행이 남았다");
+
+    scanner.run_until_idle().await.unwrap();
+    assert_eq!(env.cursor().await.hash, b1);
+    assert_eq!(env.entries("dep:pending:").await, 1);
+    assert_eq!(env.balance(&AccountKey::pending_deposit(1)).await, 100);
     env.db.drop_db().await;
 }
