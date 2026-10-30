@@ -1,0 +1,2 @@
+# 일시 DB 오류가 난 블록을 처리할 수 없는 블록으로 보고 다시 하지 않고 DB 커서를 그 블록으로 옮기는 변형(T5.2). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i5_recovery::transient_db_error_leaves_no_partial_state --exact

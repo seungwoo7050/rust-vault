@@ -1,0 +1,26 @@
+--- a/crates/vault/src/deposit.rs
++++ b/crates/vault/src/deposit.rs
+@@ -300,6 +300,23 @@
+ 
+     /// 블록 하나를 한 트랜잭션으로 처리한다(ADR-002 결정 3).
+     async fn apply_block(&mut self, block: Block) -> Result<Step, ScanError> {
++        let header = block.header;
++        match self.apply_block_once(block).await {
++            // DB 오류가 난 블록은 처리할 수 없는 블록으로 보고 건너뛴다: 다시 하지 않고 DB 커서를 그 블록으로 옮긴다
++            Err(ScanError::Transient(_)) => {
++                self.retry = None;
++                sqlx::query("UPDATE scan_cursor SET number = $1, hash = $2")
++                    .bind(db_number(header.number)?)
++                    .bind(header.hash.to_string())
++                    .execute(&self.pool)
++                    .await?;
++                Ok(Step::Processed(header))
++            }
++            r => r,
++        }
++    }
++
++    async fn apply_block_once(&mut self, block: Block) -> Result<Step, ScanError> {
+         let mut tx = self.pool.begin().await?;
+         if save_header(&mut tx, &block.header).await? == Saved::WasOrphaned {
+             // 한 번 고아로 표시한 블록이 다시 canonical이 됐다(A → B → A, ADR-002 결정 10).
