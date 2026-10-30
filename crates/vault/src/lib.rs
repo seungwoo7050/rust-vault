@@ -6,3 +6,4 @@ pub mod deposit;
 pub mod ledger;
 pub mod signer;
 pub mod store;
+pub mod withdrawal;

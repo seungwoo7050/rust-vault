@@ -2,7 +2,7 @@
 //!
 //! 한 `step`은 둘 중 하나를 DB 트랜잭션 하나로 한다.
 //! - 블록 처리: 헤더 저장 → 잠정 입금 → 확정 → 커서 전진 (`apply_block`)
-//! - 되감기: 공통 조상 찾기 → 고아 표시·역분개·커서 이동, 또는 확정 입금이 걸리면 사고 기록·정지 (`rewind`)
+//! - 되감기: 공통 조상 찾기 → 고아 표시·역분개·커서 이동, 또는 확정 입금이나 결론 난 출금이 걸리면 사고 기록·정지 (`rewind`)
 //!
 //! 모든 커밋은 `store::commit`을 거친다. 장애 주입 지점은 블록 수신 직후(`BlockFetched`),
 //! 분개 기록 뒤 커서 전진 전(`BlockEntriesWritten`), 각 커밋 직전·직후(`BeforeCommit`·`AfterCommit`)다.
@@ -20,6 +20,7 @@ use crate::chain::{
 };
 use crate::ledger::{self, AccountKey, Amount, Line, NewEntry, PostError};
 use crate::store::{self, CommitError, Failure, FaultPoint, Faults, Injected, NoFaults, Site};
+use crate::withdrawal::{self, ConcludedTx};
 
 /// 스캐너 설정.
 #[derive(Debug, Clone, Copy)]
@@ -358,11 +359,14 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
 
         let mut tx = self.pool.begin().await?;
         let confirmed = deposits_above(&mut tx, ancestor.number, "confirmed").await?;
-        if !confirmed.is_empty() {
+        // 결론 난 출금의 tx가 든 블록도 같다(ADR-003 결정 6). 지급 분개는 되돌리지 않는다.
+        // 같은 raw tx가 새 분기에 다시 들어갈 수 있어 출금 처리기도 사고 기록을 보고 멈춘다
+        let withdrawals = withdrawal::concluded_above(&mut tx, ancestor.number).await?;
+        if !confirmed.is_empty() || !withdrawals.is_empty() {
             // 확정된 입금이 canonical에서 빠졌다: "N보다 깊은 reorg는 없다"는 정책 가정이 깨졌다.
             // 확정된 입금은 되돌리지 않는다. 그 사이 출금됐을 수 있어 자동 회수는 음수나 엉뚱한 회수를 만든다.
             // 그래서 원장·헤더·커서는 그대로 두고 사고 기록과 정지만 커밋한다
-            let reason = record_violations(&mut tx, &confirmed).await?;
+            let reason = record_violations(&mut tx, &confirmed, &withdrawals).await?;
             set_halted(&mut tx, &reason).await?;
             store::commit(tx, &self.faults, Site::Rewind)
                 .await
@@ -699,10 +703,11 @@ async fn deposits_above(
     rows.into_iter().map(DepositRow::decode).collect()
 }
 
-/// 확정 입금마다 사고 기록 한 행. 정지 사유를 돌려준다.
+/// 확정 입금과 결론 난 출금마다 사고 기록 한 행. 정지 사유를 돌려준다.
 async fn record_violations(
     tx: &mut Transaction<'_, Postgres>,
     confirmed: &[Deposit],
+    withdrawals: &[ConcludedTx],
 ) -> Result<String, sqlx::Error> {
     for d in confirmed {
         sqlx::query(
@@ -715,11 +720,32 @@ async fn record_violations(
         .execute(&mut **tx)
         .await?;
     }
+    for w in withdrawals {
+        sqlx::query(
+            "INSERT INTO finality_violations (kind, block_hash, tx_hash, amount)
+             VALUES ('withdrawal', $1, $2, $3::numeric)",
+        )
+        .bind(&w.block_hash)
+        .bind(&w.tx_hash)
+        .bind(&w.amount)
+        .execute(&mut **tx)
+        .await?;
+    }
+    let first = confirmed
+        .first()
+        .map(|d| (d.tx_hash.to_string(), d.block_hash.to_string()))
+        .or_else(|| {
+            withdrawals
+                .first()
+                .map(|w| (w.tx_hash.clone(), w.block_hash.clone()))
+        })
+        .unwrap_or_default();
     Ok(format!(
-        "reorg removes {} confirmed deposit(s), first tx {} in block {}",
+        "reorg removes {} confirmed deposit(s) and {} concluded withdrawal(s), first tx {} in block {}",
         confirmed.len(),
-        confirmed[0].tx_hash,
-        confirmed[0].block_hash
+        withdrawals.len(),
+        first.0,
+        first.1
     ))
 }
 
