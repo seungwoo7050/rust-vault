@@ -1,6 +1,6 @@
 --- a/crates/vault/src/deposit.rs
 +++ b/crates/vault/src/deposit.rs
-@@ -354,7 +354,7 @@
+@@ -361,7 +361,7 @@
  
  /// reorg 감지(ADR-002 결정 4). 번호가 커서 다음이어도 부모 해시가 커서 해시와 다르면 다른 분기의 블록이다.
  fn extends_cursor(header: &BlockHeader, cursor: &Cursor) -> bool {

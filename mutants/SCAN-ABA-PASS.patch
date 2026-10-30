@@ -1,0 +1,11 @@
+--- a/crates/vault/src/deposit.rs
++++ b/crates/vault/src/deposit.rs
+@@ -239,7 +239,7 @@
+             // 한 번 고아로 표시한 블록이 다시 canonical이 됐다(A → B → A, ADR-002 결정 10).
+             // 그 블록의 잠정 입금은 이미 역분개됐고 같은 키로는 다시 기록할 수 없다.
+             // 넘어가면 canonical 입금을 조용히 잃으므로, 그런 입금이 있을 때만 멈춘다
+-            if has_reverted_deposits(&mut tx, block.header.hash).await? {
++            if false {
+                 drop(tx);
+                 let reason = format!(
+                     "orphaned block {} {} with reverted deposits is canonical again",

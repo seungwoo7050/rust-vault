@@ -1,6 +1,6 @@
 --- a/crates/vault/src/deposit.rs
 +++ b/crates/vault/src/deposit.rs
-@@ -387,7 +387,7 @@
+@@ -394,7 +394,7 @@
          kind: "dep:pending".into(),
          lines: vec![
              Line::debit(AccountKey::hot_wallet(d.address), d.amount),

@@ -1,6 +1,6 @@
 --- a/crates/vault/src/deposit.rs
 +++ b/crates/vault/src/deposit.rs
-@@ -521,16 +521,15 @@
+@@ -565,16 +565,15 @@
      h: BlockNumber,
      confirmations: u64,
  ) -> Result<(), ScanError> {

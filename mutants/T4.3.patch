@@ -1,6 +1,6 @@
 --- a/crates/vault/src/deposit.rs
 +++ b/crates/vault/src/deposit.rs
-@@ -383,7 +383,7 @@
+@@ -390,7 +390,7 @@
  /// 키에 블록 해시가 있어 reorg 뒤 다른 블록에 다시 들어간 같은 tx는 새 잠정 분개가 된다.
  fn pending_entry(chain_id: u64, d: &Deposit) -> NewEntry {
      NewEntry {
