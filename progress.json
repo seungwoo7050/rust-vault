@@ -5,15 +5,15 @@
     "commit": "6b4a912"
   },
   "baseline": {
-    "commit": "a5cb30f",
-    "note": "05 끝. 06의 시작 기준점",
-    "verify": "fmt ✓ clippy ✓ test 9/9 db 43/43 ignored 0 invariants ✓ guards ✓ public ✓ (메인 실행)",
-    "tools": "cargo 1.97.1, anvil 1.8.7(~/.foundry/bin, PATH에 없을 수 있음), docker"
+    "commit": "e8d2ecf",
+    "note": "06 끝. 전체 로드맵(00..06) 완료",
+    "verify": "fmt ✓ clippy ✓ test 11/11 db 48/48 ignored 0 invariants ✓ guards ✓ public ✓ (메인 실행, anvil 포함)",
+    "tools": "cargo 1.97.1, anvil 1.8.7(~/.foundry/bin), docker"
   },
   "current": {
     "branch": "06-recon-analysis",
-    "stage": "implement",
-    "note": "브리프 briefs/06-recon-analysis.md 확정. 구현 worktree ../rust-vault-06-recon-analysis(05 @ a5cb30f에서)"
+    "stage": "done",
+    "note": "로드맵 전체 브랜치(00-charter ~ 06-recon-analysis) 완료"
   },
   "branches": {
     "00-charter": {
@@ -133,6 +133,24 @@
       "verify": "fmt ✓ clippy ✓ test 9/9 db 43/43 ignored 0 invariants ✓ guards ✓ public ✓ (메인 실행)",
       "mutants": "잡힘 34 가려짐 0 기타 0 (메인 실행)",
       "docs": "devlog 완료(공개 저장소 밖)",
+      "done": "2026-10-31"
+    },
+    "06-recon-analysis": {
+      "commits": "05-withdrawal..e8d2ecf",
+      "head": "e8d2ecf",
+      "worktree": "../rust-vault-06-recon-analysis",
+      "proved": [
+        "R9(recon)",
+        "anvil-reorg-poc",
+        "reth-analysis"
+      ],
+      "eval": [
+        "1차 실패(기준 3: tests/recon.rs에서 출금 영수증·wd:settle/wd:fee 대조 및 온체인 입금 역대조 경로 미도달, 기준 4: reth-reorg.md 줄 번호 #L 누락) → 보강(cedab61, e8d2ecf) 및 RECON-DEPOSIT 변형 추가",
+        "2차 통과(기준 1–5 모두 통과, 변형 37/37 잡힘 및 .expect 일치)"
+      ],
+      "verify": "fmt ✓ clippy ✓ test 11/11 db 48/48 ignored 0 invariants ✓ guards ✓ public ✓ (메인 실행, anvil 포함)",
+      "mutants": "잡힘 37 가려짐 0 기타 0 (메인 실행, .expect 검증 포함)",
+      "docs": "devlog 완료(공개 저장소 밖), docs/analysis/reth-reorg.md, README.md 불변조건 추적표",
       "done": "2026-10-31"
     }
   },
