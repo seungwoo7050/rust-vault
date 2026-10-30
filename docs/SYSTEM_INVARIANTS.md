@@ -26,7 +26,7 @@
 | I3 | 모든 분개는 줄 금액(차변 +, 대변 −)의 합이 0이고 줄이 2개 이상이다. 따라서 전체 계정 잔액 합(시산)도 언제나 0이다 | Rust 쪽 검증과 DB의 커밋 시점 제약 트리거, 두 겹([ADR-001](adr/001-ledger-model.md)) |
 | I4 | 입금은 그 tx를 담은 블록이 지금 canonical chain에 있고 확정 수가 N 이상일 때만 확정된다. canonical에서 빠진 블록의 잠정 입금은 역분개된다. 확정된 입금은 원장에서 되돌리지 않는다(정책 가정이 깨진 것으로 보고 사고 기록·처리 중지) | 블록 헤더(번호·해시·부모 해시) 저장과 부모 해시 비교로 reorg 감지. 확정은 원장이 아니라 canonical 헤더로 계산([ADR-002](adr/002-reorg-handling.md)) |
 | I5 | 장애 주입 지점 어디에서 종료하고 재시작해도, 최종 원장·커서·출금 상태가 장애 없는 실행과 같다 | 블록 하나(또는 출금 상태 전이 하나)의 모든 쓰기를 한 DB 트랜잭션으로 묶는다. 외부 부작용(tx 전송)은 그 앞 상태가 커밋된 뒤에만 한다 |
-| I6 | 결과를 모르는 RPC 오류(타임아웃, 연결 끊김, 응답 유실)는 `Indeterminate`로 분류되고, 이것만으로는 출금이 `Failed`가 되거나 홀드가 풀리거나 블록이 빈 것으로 처리되지 않는다 | RPC 결과 타입을 `Ok`, `Definite(오류)`, `Indeterminate` 셋으로 나눈다. `Unknown` 상태는 영수증·계정 nonce 조회로만 벗어난다([ADR-003](adr/003-nonce-and-rpc-uncertainty.md)) |
+| I6 | 결과를 모르는 RPC 오류(타임아웃, 연결 끊김, 응답 유실)는 `Indeterminate`로 분류되고, 이것만으로는 출금이 `Failed`가 되거나 홀드가 풀리거나 블록이 빈 것으로 처리되지 않는다 | RPC 결과 타입을 `Ok`, `Definite(오류)`, `Indeterminate` 셋으로 나눈다. `Unknown` 상태는 영수증·계정 nonce 조회로만 낸다. `Unknown`에서 `Sent`·`NeedsReview`로 가는 전이는 결론이 아니다([ADR-003](adr/003-nonce-and-rpc-uncertainty.md)) |
 
 ## 추적표
 
@@ -62,7 +62,7 @@
 
 | ID | 시나리오 | 테스트 | 넣는 입력과 단언 | 실패해야 할 변형 | 변형을 가릴 수 있는 장치 | 브랜치 |
 | --- | --- | --- | --- | --- | --- | --- |
-| T1.1 | — | `i1_asset_safety::rejected_entry_changes_no_balance` | 한 DB 트랜잭션 안에서 정상 분개와 거부될 분개(없는 계정, 차대 불일치, 사용자 잔액 부족)를 섞은 임의 열을 기록한 뒤 그 트랜잭션을 커밋(proptest). 단언: 커밋이 성공하고, 계정 잔액이 정상 분개만으로 계산한 모델과 같다 | 분개 기록에서 savepoint를 없앰(없는 계정의 FK 위반이 트랜잭션 전체를 중단시켜 커밋이 실패한다) | 쓰기 전 Rust 검사(차대·줄 수 거부는 쓰기 전에 걸려 savepoint와 무관하다. 그래서 FK로만 걸리는 없는 계정 입력에 기댄다, ADR-001 결정 8) | 02-ledger |
+| T1.1 | — | `i1_asset_safety::rejected_entry_changes_no_balance` | 한 DB 트랜잭션 안에서 정상 분개와 거부될 분개(없는 계정, 차대 불일치, 사용자 잔액 부족)를 섞은 임의 열을 기록한 뒤 그 트랜잭션을 커밋(proptest). 단언: 커밋이 성공하고, 계정 잔액이 정상 분개만으로 계산한 모델과 같다 | 분개 기록에서 savepoint를 없앰(없는 계정의 FK 위반이 트랜잭션 전체를 중단시키고, 그 트랜잭션의 커밋은 롤백으로 끝나 정상 분개까지 사라진다) | 쓰기 전 Rust 검사(차대·줄 수 거부는 쓰기 전에 걸려 savepoint와 무관하다. 그래서 FK로만 걸리는 없는 계정 입력에 기댄다, ADR-001 결정 8) | 02-ledger |
 | T1.2 | F2 | `i1_asset_safety::pending_deposit_not_spendable` | 확정 수 N−1인 입금 직후 같은 금액의 출금 홀드 요청. 단언: 요청 `Rejected`, `user:u` = 0, 확정 뒤 같은 금액 요청은 `Held` | 잠정 입금을 사용자 계정에 바로 대변 기록 | 없음 | 03-deposit-reorg |
 | T1.3 | — | `i1_asset_safety::hold_rejects_overspend` | 잔액보다 큰 출금, 잔액을 나눠 쓰는 동시 출금 두 건. 단언: 큰 출금 `Rejected`, 동시 두 건 중 잔액 안의 것만 `Held`, `user:u` ≥ 0 | 홀드 분개의 사용자 잔액 음수 검사 제거 | 없음 | 05-withdrawal |
 | T2.1 | F1, F7 | `i2_idempotency::same_key_reposted_changes_nothing` | 임의 분개 열에 같은 키 재기록을 무작위 위치로 끼움(proptest). 단언: 잔액·분개 수가 중복 없는 열과 같고, 재기록은 기존 분개 ID를 돌려준다 | 멱등 키 유일 제약과 기존 키 조회 제거 | 없음 | 02-ledger |
@@ -70,7 +70,7 @@
 | T2.3 | F1, F3 | `i2_idempotency::duplicate_block_events_credit_once` | (가) 같은 블록을 2~3번 전달 (나) 블록 커밋 직후 "결과 모름" 오류를 주입해 같은 프로세스가 그 블록을 다시 처리 (다) 재시작 후 커서 직전 블록 재전달. 단언: 입금마다 `pending_deposit:u`·`user:u`에 한 번씩만 반영 | 입금 키를 tx 해시 대신 수신 순번으로 만듦((나)의 재처리가 원장까지 닿아 두 번 기록된다) | 끌어오기 커서(재전달 블록은 원장까지 안 온다. 그래서 (나)를 넣는다) | 03-deposit-reorg |
 | T2.4 | F6 | `i2_idempotency::retried_withdrawal_request_holds_once` | 같은 출금 요청 ID를 여러 번 제출(재시작 사이에도). 단언: 출금 행 1개, 홀드 분개 1개, 체인 지급 1회 | `withdrawals.request_id` 유일 제약과 기존 요청 조회를 제거(홀드 키는 그대로 두어도 두 번째 출금 행이 따로 서명·지급된다) | 홀드 멱등 키(그래서 변형은 요청 ID 중복 확인을 없앤다) | 05-withdrawal |
 | T3.1 | — | `i3_ledger_balance::every_posted_entry_sums_to_zero` | 정상 분개만으로 된 임의 열(proptest). 단언: 모든 기록이 성공하고, 분개별 줄 합 0, 시산 0, 계정 잔액이 모델 계산과 같다 | 분개 줄 기록 루프가 마지막 줄을 빠뜨림(커밋 트리거가 거부해 "모두 성공" 단언이 깨진다) | Rust 쪽 검증(그래서 변형은 검증 뒤 쓰기 루프에 둔다) | 02-ledger |
-| T3.2 | F7 | `i3_ledger_balance::db_rejects_unbalanced_entry` | Rust 검증을 거치지 않고 SQL로 차대 불일치 분개 삽입 | 커밋 시점 제약 트리거 제거 | Rust 쪽 검증(그래서 SQL로 직접 넣는다) | 02-ledger |
+| T3.2 | F7 | `i3_ledger_balance::db_rejects_unbalanced_entry` | Rust 검증을 거치지 않고 SQL로 차대 불일치 분개 삽입 후 커밋. 단언: 커밋이 제약 위반으로 거부되고, 그 분개와 줄이 남지 않으며 시산 0 | 커밋 시점 제약 트리거 제거 | Rust 쪽 검증(그래서 SQL로 직접 넣는다) | 02-ledger |
 | T3.3 | F2 | `i3_ledger_balance::trial_balance_zero_after_reorgs` | 입금·reorg·재포함·확정이 섞인 임의 체인 이력. 단언: 스캔이 오류 없이 head까지 가고, 시산 0, 고아 블록의 잠정 입금 잔액 0, `hot_wallet:{입금 주소}` 잔액 = 가짜 체인 canonical 입금 합 | 역분개가 잠정 입금 계정 줄만 쓰고 핫월렛 줄을 빠뜨림(거부되어 스캔이 멈춘다) | 커밋 트리거(그래서 스캔 무오류를 단언한다) | 03-deposit-reorg |
 | T4.1 | F2 | `i4_chain_consistency::reorg_before_confirmation_reverses_pending` | 입금 블록을 포함한 깊이 1~N−1의 분기 교체. 단언: 그 입금의 역분개 1개, `pending_deposit:u` = 0(새 분기에 그 tx가 없을 때), `user:u` 불변, 커서 = 새 분기 head | reorg 감지에서 부모 해시 비교를 빼고 블록 번호만 봄 | 없음 | 03-deposit-reorg |
 | T4.2 | F2 | `i4_chain_consistency::reorg_beyond_confirmation_keeps_ledger_and_halts` | 확정된 입금 블록을 빼는 깊이 N 이상의 reorg. 단언: 분개 수·모든 잔액 불변, `finality_violations` 1행, 스캐너 정지 | 확정된 입금도 역분개 | 없음 | 03-deposit-reorg |
@@ -82,7 +82,7 @@
 | T5.3 | F3, F6 | `i5_recovery::restart_after_sign_resends_same_tx` | 서명 tx 커밋 직후, 전송 직후 종료 후 재시작. 단언: 출금마다 체인 지급 1회, 보낸 raw tx가 저장본과 같다 | 재시작 때 `Signed` 출금에 nonce를 새로 할당해 다시 서명(같은 nonce로 다시 서명하면 결정적 서명이라 같은 바이트가 나와 변형이 안 된다) | 결정적 서명(같은 nonce면 같은 바이트. 그래서 새 nonce로 다시 서명) | 05-withdrawal |
 | T6.1 | F4 | `i6_external_uncertainty::send_timeout_moves_to_unknown` | 전송 요청은 반영하고 응답만 버림. 단언: 상태 `Unknown`, 홀드 유지, 새 서명 tx 0개 | 타임아웃을 `Failed`로 매핑하고 홀드 해제 | 없음 | 05-withdrawal |
 | T6.2 | F4 | `i6_external_uncertainty::lost_response_resolved_by_receipt` | 응답 유실 뒤 조회가 몇 번 타임아웃되고 tx가 채굴됨. (가) 기한 전에 채굴 (나) 가짜 시계를 기한 너머로 돌려 `NeedsReview`가 된 뒤 채굴. 단언: 둘 다 `Confirmed`, 지급 분개 1개, 홀드 해제 분개 0개 | 기한이 지나면 `Unknown`·`NeedsReview`를 `Failed`로 바꾸고 홀드 해제((나)에서 깨진다) | 기한(그래서 가짜 시계로 기한 뒤를 만든다) | 05-withdrawal |
-| T6.3 | F5 | `i6_external_uncertainty::nonce_conflict_never_double_pays` | (가) 내 tx가 이미 채굴된 뒤 재전송이 "nonce too low"를 받음 (나) 외부 tx가 같은 nonce를 먼저 씀. 단언: (가) 지급 1회, `Confirmed` (나) `NeedsReview`, 홀드 유지, 우리 지급 0회 | "nonce too low"에서 새 nonce로 다시 서명((가)에서 이중 지급, (나)에서 `NeedsReview`가 아님) | 외부 선점만 넣으면 우리 지급이 1회로 남는다(그래서 (가)를 넣는다) | 05-withdrawal |
+| T6.3 | F5 | `i6_external_uncertainty::nonce_conflict_never_double_pays` | (가) 전송 직후 종료해 `Signed`로 남은 사이 내 tx가 채굴되고, 재시작 뒤 재전송이 "nonce too low"를 받음 (나) 외부 tx가 같은 nonce를 먼저 씀. 단언: (가) 지급 1회, `Confirmed` (나) `NeedsReview`, 홀드 유지, 우리 지급 0회 | "nonce too low"에서 새 nonce로 다시 서명((가)에서 이중 지급, (나)에서 `NeedsReview`가 아님) | 외부 선점만 넣으면 우리 지급이 1회로 남는다(그래서 (가)를 넣는다) | 05-withdrawal |
 | T6.4 | F6 | `i6_external_uncertainty::resend_uses_identical_raw_tx` | 첫 전송은 반영하고 응답만 버린 뒤 `Unknown`에서 여러 번 재전송. 단언: 노드가 받은 raw tx가 모두 저장본과 같고 지급 1회 | 재전송 때마다 nonce를 새로 할당해 다시 서명 | 결정적 서명(T5.3과 같다) | 05-withdrawal |
 | T6.5 | F4 | `i6_external_uncertainty::read_timeout_never_skips_block` | 블록 조회 타임아웃·빈 응답을 입금 블록에 주입. 단언: 커서가 그 블록 앞에 머물고, 조회가 회복되면 입금이 한 번 반영되고, 역분개 0개 | 조회 실패 블록을 빈 블록으로 보고 커서 전진 | 없음 | 03-deposit-reorg |
 | T6.6 | F3, F4, F5, F6 | `i6_external_uncertainty::random_send_faults_pay_at_most_once` | 응답 유실·타임아웃·nonce 충돌·재시작을 무작위로 섞은 출금 열(proptest). 출금 요청마다 체인 지급 수 ≤ 1, 원장 출금액 = 체인 지급액 | T6.1, T6.3, T6.4의 변형 중 어느 하나 | T6.1·T6.3·T6.4 행 참조 | 05-withdrawal |

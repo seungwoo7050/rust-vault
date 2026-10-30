@@ -17,7 +17,8 @@
 | 확정 수(confirmations) | 입금이 들어간 블록부터 스캐너가 처리한 canonical head(커서)까지의 블록 수(그 블록 포함, [ADR-002](adr/002-reorg-handling.md)) |
 | canonical chain | 노드가 지금 정본으로 보는 체인. reorg가 나면 바뀐다 |
 | 홀드 | 출금 요청 금액을 사용자 잔액에서 출금 대기 계정으로 옮겨 다시 쓰지 못하게 하는 분개 |
-| `Unknown` | 출금 tx를 보냈지만 결과를 모르는 상태. 체인 조회로만 벗어난다 |
+| `Unknown` | 출금 tx를 보냈지만 결과를 모르는 상태. 결론(`Confirmed`·`Failed`)은 영수증·계정 nonce 조회로만 낸다 |
+| `NeedsReview` | 기한 안에 결론이 안 났거나 내 nonce를 다른 tx가 쓴 출금. 홀드를 유지하고 사람이 보되, 조회 루틴은 계속 돌아 영수증이 나오면 결론 낸다 |
 
 ## 기능 요구사항
 

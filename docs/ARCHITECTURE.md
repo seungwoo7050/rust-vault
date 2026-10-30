@@ -75,4 +75,4 @@
 
 **출금(05)** 요청 → 홀드 트랜잭션 → 서명 트랜잭션(nonce·raw tx 저장) → 커밋 뒤 전송 → `Sent`/`Unknown` → 조회 루틴 → `Confirmed`/`Failed`/`NeedsReview`. 자세한 규칙은 [ADR-003](adr/003-nonce-and-rpc-uncertainty.md).
 
-**재시작(04)** DB에서 커서와 미완료 출금을 읽는다. 커서 다음 블록부터 스캔하고, `Signed`는 같은 raw tx를 다시 보내고, `Sent`·`Unknown`은 조회 루틴에 넣는다. 메모리에서 이어받는 것은 없다.
+**재시작(04)** DB에서 커서와 미완료 출금을 읽는다. 커서 다음 블록부터 스캔하고, `Signed`는 같은 raw tx를 다시 보내고, `Sent`·`Unknown`·`NeedsReview`는 조회 루틴에 넣는다. 메모리에서 이어받는 것은 없다.

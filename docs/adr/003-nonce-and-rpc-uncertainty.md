@@ -50,8 +50,8 @@
    - 기한은 `Clock` trait로 잰다. 테스트는 가짜 시계를 앞으로 돌려 기한 전후를 만든다.
 4. **재전송은 같은 바이트만.** 재시작 루틴, `Unknown`, reorg 뒤 재전송 모두 저장된 raw tx를 그대로 보낸다. 다시 서명하는 코드 경로를 두지 않는다. 서명 함수는 `Held → Signed` 전이에서만 부른다.
 5. **nonce 할당.** `wallet_nonces(address, next_nonce)` 행을 `SELECT … FOR UPDATE`로 잠그고 할당·증가한다. 처음 한 번만 체인의 확정 nonce로 초기화하고, 그 뒤로는 DB가 원본이다. 출금 주소의 키를 이 시스템 밖에서 쓰지 않는다는 것이 운영 전제다(어기면 3의 `NeedsReview`로 드러난다).
-6. **확정 뒤 깊이의 reorg.** `Confirmed` 출금의 tx가 확정 수 N보다 깊은 reorg로 빠지면 입금과 같이 정책 가정이 깨진 것이다([ADR-002](002-reorg-handling.md) 결정 7). 원장은 바꾸지 않고(지급 분개를 되돌리지 않는다) `finality_violations`에 출금으로 기록하고 출금 처리를 멈춘다. 같은 raw tx가 새 분기에 다시 들어갈 수 있으므로 자동 재전송·재서명도 하지 않는다.
-7. **재시작 루틴.** `Signed`는 다시 보내고, `Sent`·`Unknown`은 조회 루틴에 넣는다. 전송 직후 상태를 쓰기 전에 죽었으면 `Signed`로 남아 같은 바이트가 다시 나가고, 노드는 "already known"을 돌려준다(I5).
+6. **확정 뒤 깊이의 reorg.** `Confirmed` 출금의 tx가 확정 수 N보다 깊은 reorg로 빠지면 입금과 같이 정책 가정이 깨진 것이다([ADR-002](002-reorg-handling.md) 결정 7). 원장은 바꾸지 않고(지급 분개를 되돌리지 않는다) `finality_violations`에 출금으로 기록하고 출금 처리를 멈춘다. 감지는 입금 스캐너의 되감기가 한다(ADR-002 결정 7): 고아가 될 블록에 `Confirmed` 출금의 tx 해시가 있으면 위반이다. 같은 raw tx가 새 분기에 다시 들어갈 수 있으므로 자동 재전송·재서명도 하지 않는다.
+7. **재시작 루틴.** `Signed`는 다시 보내고, `Sent`·`Unknown`·`NeedsReview`는 조회 루틴에 넣는다(결정 3: `NeedsReview`도 영수증으로 결론 난다). 전송 직후 상태를 쓰기 전에 죽었으면 `Signed`로 남아 같은 바이트가 다시 나가고, 노드는 "already known"을 돌려준다(I5).
 
 ## 검증
 
