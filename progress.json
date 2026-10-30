@@ -5,14 +5,15 @@
     "commit": "6b4a912"
   },
   "baseline": {
-    "commit": "6b4a912",
-    "note": "코드 없음. verify는 01-harness부터 생긴다",
+    "commit": "6025d0c",
+    "note": "01-harness 끝. 02-ledger의 시작 기준점",
+    "verify": "fmt ✓ clippy ✓ test 0/0 db 1/1 ignored 24 invariants ✓ guards ✓ public ✓",
     "tools": "cargo 1.97.1, anvil 1.8.7(~/.foundry/bin, PATH에 없을 수 있음), docker"
   },
   "current": {
-    "branch": "01-harness",
-    "stage": "implement",
-    "note": "브리프 briefs/01-harness.md 확정. 구현 worktree ../rust-vault-01-harness(메인이 만듦). 구현 서브에이전트 진행 중"
+    "branch": "02-ledger",
+    "stage": "brief",
+    "note": "01-harness 완료. 다음: 02-ledger 브리프. devlog 서브에이전트 진행 중"
   },
   "branches": {
     "00-charter": {
@@ -32,9 +33,35 @@
       "verify": "코드 없음, check-public 통과(8개 파일)",
       "docs": "devlog 완료(공개 저장소 밖)",
       "done": "2026-10-30"
+    },
+    "01-harness": {
+      "commits": [
+        "f719be7",
+        "b81590e",
+        "b3d0491",
+        "b6f5dfa",
+        "7bc0db2",
+        "a82fc9c",
+        "6025d0c"
+      ],
+      "worktree": "../rust-vault-01-harness",
+      "eval": [
+        "1차 통과(기준 1–6, 변형 10종 모두 잡힘), 경미 2건(jq 없을 때 fail-open, Stop 차단 경로 테스트 없음) → 구현이 고침(6025d0c)"
+      ],
+      "verify": "fmt ✓ clippy ✓ test 0/0 db 1/1 ignored 24 invariants ✓ guards ✓ public ✓ (메인 실행)",
+      "done": "2026-10-30"
     }
   },
-  "blocked": [],
+  "blocked": [
+    {
+      "what": "CI 실제 실행(.github/workflows/verify.yml)",
+      "why": "원격 저장소 없음. 생성·푸시는 사람에게 묻는다"
+    },
+    {
+      "what": "rust-toolchain.toml 적용 확인",
+      "why": "로컬 cargo가 Homebrew 것이라 rustup 툴체인 파일이 적용되지 않는다. CI에서만 확인 가능"
+    }
+  ],
   "push_policy": "로컬 커밋만. 원격 저장소 생성과 푸시는 사람에게 묻는다.",
   "needs_human": [
     "개발 원칙 7개의 원문이 기록에 없다. 받으면 docs/PRINCIPLES.md로 더한다(출처: 사람 설계)"
@@ -43,5 +70,8 @@
     "테스트 표에 단언·가리는 장치 열이 없어 변형 판정이 문서 추론에 기댄다(interventions 2026-10-30)",
     "worktree 격리 서브에이전트는 메인 세션의 현재 작업 디렉터리 저장소에서 worktree를 만든다. 다른 저장소로 cd한 뒤 띄우면 엉뚱한 저장소가 된다(01-harness 1차 시도). 구현 worktree는 메인이 rust-vault에서 직접 만들고 경로를 넘긴다"
   ],
-  "deferred": []
+  "deferred": [
+    "stop.sh의 STOP_VERIFY_CMD 환경 변수 덮어쓰기: 테스트용이지만 훅 환경에서 설정되면 Stop 검증을 바꿀 수 있다. 오용 사례가 나오면 테스트 전용 경로로 좁힌다",
+    "컴포즈 호스트 포트 55433(5433은 다른 프로젝트가 사용)"
+  ]
 }
