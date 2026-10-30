@@ -52,6 +52,26 @@ expect 0 "Bash로 마이그레이션 읽기"   "$(bash_ 'cat crates/vault/migrat
 if printf '{"stop_hook_active":true,"cwd":"%s"}' "$repo" | "$top/scripts/harness/guards/stop.sh"; then
   pass=$((pass + 1)); passes=$((passes + 1))
 else fail=$((fail + 1)); echo "  ✗ stop_hook_active 통과"; fi
+# Stop 훅: stop_hook_active가 거짓이면 검증 명령(STOP_VERIFY_CMD 스텁)의 결과를 따른다
+printf '#!/usr/bin/env bash\necho "verify: fmt ✗"; exit 1\n' >"$repo/verify-fail.sh"
+printf '#!/usr/bin/env bash\necho "verify: fmt ✓"; exit 0\n' >"$repo/verify-ok.sh"
+chmod +x "$repo/verify-fail.sh" "$repo/verify-ok.sh"
+# expect_cmd <2|0> <설명> <명령...>: stdin은 비활성 Stop 입력
+expect_cmd() {
+  local want=$1 desc=$2 err rc; shift 2
+  err=$(printf '{"stop_hook_active":false,"cwd":"%s"}' "$repo" | "$@" 2>&1 >/dev/null); rc=$?
+  if [ "$rc" -eq "$want" ] && { [ "$want" -eq 0 ] || [ -n "$err" ]; }; then
+    pass=$((pass + 1)); [ "$want" -eq 2 ] && blocks=$((blocks + 1)) || passes=$((passes + 1))
+  else fail=$((fail + 1)); echo "  ✗ $desc: 종료 코드 $rc(기대 $want) ${err}"; fi
+}
+expect_cmd 2 "verify 실패 시 Stop 막음" env STOP_VERIFY_CMD="$repo/verify-fail.sh" "$top/scripts/harness/guards/stop.sh"
+expect_cmd 0 "verify 통과 시 Stop 통과" env STOP_VERIFY_CMD="$repo/verify-ok.sh" "$top/scripts/harness/guards/stop.sh"
+
+# jq가 없는 PATH(bash만 둔다)에서는 세 훅 모두 막는다. verify는 통과 스텁이라 jq 검사가 없으면 0이 나온다
+mkdir -p "$repo/nojq" && ln -s "$(command -v bash)" "$repo/nojq/bash"
+for g in pre-tool post-tool stop; do
+  expect_cmd 2 "jq 없는 PATH에서 $g 막음" env PATH="$repo/nojq" STOP_VERIFY_CMD="$repo/verify-ok.sh" "$top/scripts/harness/guards/$g.sh"
+done
 
 # mutants 픽스처: D1 잡힘, D2 가려짐 → 요약이 "잡힘 1 가려짐 1 기타 0"이고 종료 코드 1
 out=$("$top/scripts/harness/mutants.sh" --root "$top/scripts/harness/fixtures/mutants-demo" 2>&1); rc=$?
