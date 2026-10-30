@@ -157,9 +157,9 @@ async fn restart_after_sign_resends_same_tx() {
     assert_eq!(w.status("t5.3-b").await, Status::Sent);
 
     w.settle(&mut p, scan::N as usize + 2).await;
+    // 보낸 raw tx가 저장본과 같은지를 먼저 본다. 재시작 뒤 다시 서명했다면 (2)의 전송 직후 종료 전에
+    // 나간 바이트가 저장본(새 서명)과 다르다
     for (id, to) in [("t5.3-a", a), ("t5.3-b", b)] {
-        assert_eq!(w.payments_to(to).len(), 1, "{id}: 체인 지급 수");
-        assert_eq!(w.status(id).await, Status::Confirmed, "{id}");
         let stored = w.stored(id).await;
         let sent: Vec<_> = w
             .chain()
@@ -173,6 +173,10 @@ async fn restart_after_sign_resends_same_tx() {
             "{id}: 보낸 raw tx {}개 중 저장본과 다른 것이 있다",
             sent.len()
         );
+    }
+    for (id, to) in [("t5.3-a", a), ("t5.3-b", b)] {
+        assert_eq!(w.payments_to(to).len(), 1, "{id}: 체인 지급 수");
+        assert_eq!(w.status(id).await, Status::Confirmed, "{id}");
     }
     w.env.db.drop_db().await;
 }
