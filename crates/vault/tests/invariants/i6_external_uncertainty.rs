@@ -1,5 +1,12 @@
 //! I6 외부 불확실성: RPC 타임아웃이나 응답 유실을 곧바로 트랜잭션 실패로 판단하지 않는다
 
+use vault::chain::BlockNumber;
+use vault::deposit::{ScanError, Step};
+use vault::ledger::AccountKey;
+use vault_sim::chain::{Call, Fault, transfer};
+
+use crate::scan::{self, Env};
+
 // T6.1 실패해야 할 변형: 타임아웃을 `Failed`로 매핑하고 홀드 해제
 #[test]
 #[ignore = "05-withdrawal"]
@@ -37,12 +44,52 @@ fn resend_uses_identical_raw_tx() {
 }
 
 // T6.5 실패해야 할 변형: 조회 실패 블록을 빈 블록으로 보고 커서 전진
-#[test]
-#[ignore = "03-deposit-reorg"]
-fn read_timeout_never_skips_block() {
-    unimplemented!(
-        "T6.5: 블록 조회 타임아웃·빈 응답을 입금 블록에 주입. 단언: 커서가 그 블록 앞에 머물고, 조회가 회복되면 입금이 한 번 반영되고, 역분개 0개"
+#[tokio::test]
+async fn read_timeout_never_skips_block() {
+    let env = Env::new().await;
+    let chain = &env.chain;
+    // genesis → b1(빈 블록)까지 스캔한 뒤 b2(입금) → b3가 보인다
+    let b1 = chain.mine_canonical(chain.genesis().hash, vec![]);
+    let mut scanner = env.scanner().await;
+    scanner.run_until_idle().await.unwrap();
+    let b2 = chain.mine_canonical(b1, vec![transfer(1, scan::addr(1), 100)]);
+    chain.mine_canonical(b2, vec![]);
+    let before = env.cursor().await;
+    assert_eq!(before.hash, b1);
+
+    // 입금 블록 조회: 타임아웃 2번, 빈 응답(아직 없음) 2번, head 조회 타임아웃 1번
+    chain.fail_next(Call::BlockAt(BlockNumber(2)), 2, Fault::Indeterminate);
+    chain.none_at(BlockNumber(2), 2);
+    chain.fail_next(Call::Head, 1, Fault::Indeterminate);
+    let head_timeout = scanner.step().await;
+    assert!(
+        matches!(head_timeout, Err(ScanError::Indeterminate(_))),
+        "head 타임아웃: {head_timeout:?}"
     );
+    assert_eq!(env.cursor().await, before, "head 타임아웃 뒤 커서");
+    for i in 0..2 {
+        let got = scanner.step().await;
+        assert!(
+            matches!(got, Err(ScanError::Indeterminate(_))),
+            "{i}번째 블록 조회 타임아웃: {got:?}"
+        );
+        assert_eq!(env.cursor().await, before, "{i}번째 타임아웃 뒤 커서");
+    }
+    for i in 0..2 {
+        let got = scanner.step().await;
+        assert!(matches!(got, Ok(Step::Idle)), "{i}번째 빈 응답: {got:?}");
+        assert_eq!(env.cursor().await, before, "{i}번째 빈 응답 뒤 커서");
+    }
+    assert_eq!(env.balance(&AccountKey::pending_deposit(1)).await, 0);
+    assert_eq!(env.entries("dep:").await, 0, "조회 실패 중 분개가 생겼다");
+
+    // 조회가 회복되면 입금이 한 번 반영된다
+    scanner.run_until_idle().await.unwrap();
+    assert_eq!(env.cursor().await.hash, chain.tip().hash);
+    assert_eq!(env.balance(&AccountKey::pending_deposit(1)).await, 100);
+    assert_eq!(env.entries("dep:pending:").await, 1, "잠정 입금 분개 수");
+    assert_eq!(env.entries("dep:revert:").await, 0, "역분개 수");
+    env.db.drop_db().await;
 }
 
 // T6.6 실패해야 할 변형: T6.1, T6.3, T6.4의 변형 중 어느 하나
