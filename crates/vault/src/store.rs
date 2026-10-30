@@ -1,4 +1,5 @@
 //! 연결 풀, 마이그레이션, 커밋 도우미, 장애 주입 자리(`Faults`), 일시 오류 분류.
+//! 입금 스캐너와 출금 처리기가 같이 쓴다.
 
 use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::{PgPool, Postgres, Transaction};
@@ -23,6 +24,8 @@ pub enum Site {
     Block,
     /// 되감기(고아 표시·역분개·커서 이동), 또는 되감기 중의 사고 기록·정지
     Rewind,
+    /// 출금 하나의 상태 전이 하나(요청·홀드, 서명·nonce 할당, 전송 결과, 결론 분개)
+    Withdrawal,
 }
 
 /// 장애 주입 지점. 이름은 docs/FAILURE_SCENARIOS.md의 "시나리오를 테스트로 만들 때"와 같다.
@@ -36,6 +39,8 @@ pub enum FaultPoint {
     BeforeCommit(Site),
     /// 커밋 직후. 커밋은 됐다
     AfterCommit(Site),
+    /// 출금 tx 전송 응답을 받은 직후, 그 결과를 상태로 쓰기 전(ADR-003 결정 7)
+    AfterSend,
 }
 
 impl std::fmt::Display for FaultPoint {
@@ -45,6 +50,7 @@ impl std::fmt::Display for FaultPoint {
             FaultPoint::BlockEntriesWritten => f.write_str("block entries written"),
             FaultPoint::BeforeCommit(s) => write!(f, "before {s:?} commit"),
             FaultPoint::AfterCommit(s) => write!(f, "after {s:?} commit"),
+            FaultPoint::AfterSend => f.write_str("after send"),
         }
     }
 }
