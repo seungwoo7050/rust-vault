@@ -4,7 +4,10 @@
 //! - 블록 처리: 헤더 저장 → 잠정 입금 → 확정 → 커서 전진 (`apply_block`)
 //! - 되감기: 공통 조상 찾기 → 고아 표시·역분개·커서 이동, 또는 확정 입금이 걸리면 사고 기록·정지 (`rewind`)
 //!
-//! 상태(커서, 헤더, 입금, 정지 여부)는 모두 DB에 있다. `Scanner`를 새로 만들면 DB에서 이어 간다.
+//! 모든 커밋은 `store::commit`을 거친다. 장애 주입 지점은 블록 수신 직후(`BlockFetched`),
+//! 분개 기록 뒤 커서 전진 전(`BlockEntriesWritten`), 각 커밋 직전·직후(`BeforeCommit`·`AfterCommit`)다.
+//!
+//! 상태(커서, 헤더, 입금, 정지 여부)는 모두 DB에 있다. `Scanner`를 새로 만들면 DB에서 이어 간다(재시작).
 //! 메모리에 두는 것은 "커밋 결과를 모르는 블록" 하나뿐이고, 그것도 같은 프로세스 안의 재시도용이다.
 
 use std::fmt;
@@ -16,10 +19,7 @@ use crate::chain::{
     RpcOutcome,
 };
 use crate::ledger::{self, AccountKey, Amount, Line, NewEntry, PostError};
-use crate::store::{Faults, Injected, NoFaults};
-
-/// 블록 커밋 직후 장애 주입 지점의 이름.
-pub const AFTER_BLOCK_COMMIT: &str = "deposit.block.after_commit";
+use crate::store::{self, CommitError, Failure, FaultPoint, Faults, Injected, NoFaults, Site};
 
 /// 스캐너 설정.
 #[derive(Debug, Clone, Copy)]
@@ -29,6 +29,9 @@ pub struct ScanConfig {
     pub confirmations: u64,
     /// 처음 한 번 저장해 커서로 삼는 헤더(가짜 체인의 genesis 등). 이 아래로는 되감지 않는다
     pub start: BlockHeader,
+    /// `run_until_idle`이 일시 오류(`ScanError::Transient`) 뒤 같은 step을 다시 하는 최대 횟수(연속).
+    /// 넘으면 그 오류를 돌려준다
+    pub transient_retries: u32,
 }
 
 /// 마지막으로 처리한 canonical 블록.
@@ -50,6 +53,7 @@ pub enum Step {
 }
 
 /// 스캔 오류. `Halted` 말고는 다음 `step`에서 다시 시도하면 된다.
+/// `Transient`만 `run_until_idle`이 스스로 다시 한다. 나머지는 호출자에게 돌려준다(블록을 건너뛰지 않는다).
 #[derive(Debug)]
 pub enum ScanError {
     /// 정지 상태다. 사람이 풀기 전에는 아무것도 하지 않는다
@@ -59,7 +63,11 @@ pub enum ScanError {
     /// 체인이 오류를 돌려줬다. 아무것도 쓰지 않았다
     Rpc(RpcError),
     /// 블록 커밋의 결과를 모른다. 다음 `step`이 같은 블록을 다시 처리한다
-    CommitUnknown(Injected),
+    CommitUnknown(String),
+    /// 일시 DB 오류. 열린 트랜잭션은 버렸다. 다시 하면 된다(커밋 뒤에 났다면 같은 블록을 다시 처리한다)
+    Transient(String),
+    /// 주입된 프로세스 종료. 이 `Scanner`는 버리고 새로 만든다(재시작)
+    Crashed(FaultPoint),
     /// 조건부 커서 이동이 0행이었다. 그 트랜잭션은 되돌렸다
     CursorMoved,
     /// 체인이 준 블록이 요청과 맞지 않거나 원장에 담을 수 없는 값이다
@@ -75,6 +83,8 @@ impl fmt::Display for ScanError {
             ScanError::Indeterminate(m) => write!(f, "chain read indeterminate: {m}"),
             ScanError::Rpc(e) => write!(f, "chain read failed: {e}"),
             ScanError::CommitUnknown(e) => write!(f, "block commit result unknown: {e}"),
+            ScanError::Transient(e) => write!(f, "transient database error: {e}"),
+            ScanError::Crashed(p) => write!(f, "crashed at {p}"),
             ScanError::CursorMoved => f.write_str("cursor moved under the scanner"),
             ScanError::BadBlock(m) => write!(f, "bad block: {m}"),
             ScanError::Ledger(e) => write!(f, "ledger: {e}"),
@@ -85,15 +95,53 @@ impl fmt::Display for ScanError {
 
 impl std::error::Error for ScanError {}
 
+/// DB 오류를 일시 오류(다시 하면 된다)와 그 밖(돌려준다)으로 가른다(`store::is_transient`).
 impl From<sqlx::Error> for ScanError {
     fn from(e: sqlx::Error) -> Self {
-        ScanError::Db(e)
+        if store::is_transient(&e) {
+            ScanError::Transient(e.to_string())
+        } else {
+            ScanError::Db(e)
+        }
     }
 }
 
 impl From<PostError> for ScanError {
     fn from(e: PostError) -> Self {
-        ScanError::Ledger(e)
+        match e {
+            PostError::Db(e) => e.into(),
+            e => ScanError::Ledger(e),
+        }
+    }
+}
+
+/// 주입된 장애를 그 자리의 오류로. 트랜잭션이 열려 있었다면 호출자가 버린다.
+fn injected(point: FaultPoint, i: Injected) -> ScanError {
+    match i {
+        Injected::Crash => ScanError::Crashed(point),
+        Injected::Transient => ScanError::Transient(format!("injected at {point}")),
+        Injected::CommitOutcomeUnknown => ScanError::CommitUnknown(format!("injected at {point}")),
+    }
+}
+
+/// 커밋 오류를 스캔 오류로. 둘째 값은 "커밋됐을 수 있다"(같은 작업을 다시 해서 확인해야 한다)이다.
+fn commit_error(e: CommitError) -> (ScanError, bool) {
+    match e {
+        // 커밋 전 지점의 "결과 모름"은 뜻이 없다. 아무것도 쓰지 않은 일시 오류로 본다
+        CommitError::NotCommitted(Failure::Injected(p, Injected::CommitOutcomeUnknown)) => {
+            (ScanError::Transient(format!("injected at {p}")), false)
+        }
+        CommitError::NotCommitted(Failure::Injected(p, i)) => (injected(p, i), false),
+        CommitError::NotCommitted(Failure::Db(e)) => (e.into(), false),
+        // 죽었으면 메모리는 사라진다. 재시작이 DB의 커서에서 이어 간다
+        CommitError::Unknown(Failure::Injected(p, Injected::Crash)) => {
+            (ScanError::Crashed(p), false)
+        }
+        CommitError::Unknown(Failure::Injected(p, i)) => (injected(p, i), true),
+        CommitError::Unknown(Failure::Db(e)) if store::is_transient(&e) => {
+            (ScanError::Transient(e.to_string()), true)
+        }
+        CommitError::Unknown(Failure::Db(e)) => (ScanError::CommitUnknown(e.to_string()), true),
     }
 }
 
@@ -150,13 +198,17 @@ pub struct Scanner<C, F = NoFaults> {
 
 impl<C: ChainClient> Scanner<C, NoFaults> {
     /// 스캐너를 만든다. 처음이면 `config.start`를 저장해 커서로 삼고, 아니면 DB의 커서에서 이어 간다.
+    ///
+    /// 재시작은 이것을 다시 부르는 것이다. 이전 프로세스의 메모리에서 이어받는 것은 없다:
+    /// 커서·헤더·입금·정지 여부는 DB에서 읽고, 커밋 전에 죽은 블록의 쓰기는 트랜잭션과 함께 사라졌으며,
+    /// 커밋 결과를 모르던 블록은 커서 다음 블록부터 다시 읽으면 멱등 키와 조건부 커서 전진이 흡수한다.
     pub async fn new(pool: PgPool, chain: C, config: ScanConfig) -> Result<Self, ScanError> {
         Self::with_faults(pool, chain, config, NoFaults).await
     }
 }
 
 impl<C: ChainClient, F: Faults> Scanner<C, F> {
-    /// 장애 주입 자리를 넣어 만든다.
+    /// 장애 주입 자리를 넣어 만든다. 재시작에 대해서는 `Scanner::new`를 본다.
     pub async fn with_faults(
         pool: PgPool,
         chain: C,
@@ -206,6 +258,7 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
                 block.header.number
             )));
         }
+        self.inject(FaultPoint::BlockFetched)?;
 
         if extends_cursor(&block.header, &cursor) {
             self.apply_block(block).await
@@ -221,13 +274,26 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
         self.run_until_idle().await
     }
 
-    /// `Step::Idle`이 나올 때까지 `step`을 돈다. 오류가 나면 그 오류로 멈춘다.
+    /// `Step::Idle`이 나올 때까지 `step`을 돈다.
+    /// 일시 오류(`Transient`)면 같은 step을 다시 한다. 다시 하는 step은 DB에서 커서를 다시 읽고 시작한다
+    /// (커밋 결과를 모르는 블록이 있으면 그 블록부터). 연속 `transient_retries`번을 넘거나 다른 오류면 그 오류로 멈춘다.
     pub async fn run_until_idle(&mut self) -> Result<(), ScanError> {
+        let mut failures = 0;
         loop {
-            if self.step().await? == Step::Idle {
-                return Ok(());
+            match self.step().await {
+                Ok(Step::Idle) => return Ok(()),
+                Ok(_) => failures = 0,
+                Err(ScanError::Transient(_)) if failures < self.config.transient_retries => {
+                    failures += 1;
+                }
+                Err(e) => return Err(e),
             }
         }
+    }
+
+    /// 장애 주입 지점. 열린 트랜잭션이 있으면 호출자가 `?`로 빠져나가며 버린다.
+    fn inject(&self, point: FaultPoint) -> Result<(), ScanError> {
+        self.faults.hit(point).map_err(|i| injected(point, i))
     }
 
     // ---- 블록 처리 -------------------------------------------------------------------------
@@ -245,7 +311,7 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
                     "orphaned block {} {} with reverted deposits is canonical again",
                     block.header.number, block.header.hash
                 );
-                return self.halt(reason).await;
+                return self.halt(reason, Site::Block).await;
             }
             // 입금이 없던 블록은 잃을 것이 없다. 고아 표시를 풀고 평소처럼 처리한다
             revive_header(&mut tx, block.header.hash).await?;
@@ -258,17 +324,17 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
             self.config.confirmations,
         )
         .await?;
+        self.inject(FaultPoint::BlockEntriesWritten)?;
         advance_cursor(&mut tx, &block.header).await?;
 
-        // 여기서부터 오류는 "커밋됐는지 모른다"이다. 같은 블록을 다시 처리하도록 남겨 둔다
         let header = block.header;
-        if let Err(e) = tx.commit().await {
-            self.retry = Some(block);
-            return Err(ScanError::Db(e));
-        }
-        if let Err(e) = self.faults.after_commit(AFTER_BLOCK_COMMIT) {
-            self.retry = Some(block);
-            return Err(ScanError::CommitUnknown(e));
+        if let Err(e) = store::commit(tx, &self.faults, Site::Block).await {
+            let (err, maybe_committed) = commit_error(e);
+            // 커밋됐는지 모르면 다음 step이 체인에 다시 묻지 않고 같은 블록을 다시 처리하도록 남겨 둔다
+            if maybe_committed {
+                self.retry = Some(block);
+            }
+            return Err(err);
         }
         Ok(Step::Processed(header))
     }
@@ -286,7 +352,7 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
                     "no common ancestor down to start block {}",
                     self.config.start.number
                 );
-                return self.halt(reason).await;
+                return self.halt(reason, Site::Rewind).await;
             }
         };
 
@@ -298,7 +364,9 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
             // 그래서 원장·헤더·커서는 그대로 두고 사고 기록과 정지만 커밋한다
             let reason = record_violations(&mut tx, &confirmed).await?;
             set_halted(&mut tx, &reason).await?;
-            tx.commit().await?;
+            store::commit(tx, &self.faults, Site::Rewind)
+                .await
+                .map_err(|e| commit_error(e).0)?;
             return Err(ScanError::Halted(reason));
         }
 
@@ -310,7 +378,10 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
             set_status(&mut tx, d, "reverted").await?;
         }
         move_cursor_back(&mut tx, &cursor, &ancestor).await?;
-        tx.commit().await?;
+        // 결과를 모르면 다음 step이 DB의 커서에서 다시 본다(되감겼으면 앞으로, 아니면 다시 되감기)
+        store::commit(tx, &self.faults, Site::Rewind)
+            .await
+            .map_err(|e| commit_error(e).0)?;
         Ok(Step::Rewound {
             from: cursor.number,
             to: ancestor.number,
@@ -343,10 +414,12 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
     }
 
     /// 정지 상태로 두고 커밋한다. 원장·헤더·커서는 건드리지 않는다.
-    async fn halt(&mut self, reason: String) -> Result<Step, ScanError> {
+    async fn halt(&mut self, reason: String, site: Site) -> Result<Step, ScanError> {
         let mut tx = self.pool.begin().await?;
         set_halted(&mut tx, &reason).await?;
-        tx.commit().await?;
+        store::commit(tx, &self.faults, site)
+            .await
+            .map_err(|e| commit_error(e).0)?;
         Err(ScanError::Halted(reason))
     }
 }

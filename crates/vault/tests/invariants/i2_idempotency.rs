@@ -4,7 +4,7 @@ use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::test_runner::{TestCaseError, TestRunner};
 use vault::chain::Notification;
-use vault::deposit::{AFTER_BLOCK_COMMIT, ScanError};
+use vault::deposit::ScanError;
 use vault::ledger::{self, AccountKey, EntryId, NewEntry, PostError, Posted};
 use vault_sim::chain::transfer;
 use vault_sim::db::TestDb;
@@ -228,7 +228,7 @@ async fn duplicate_block_events_credit_once() {
         env.chain.set_canonical(*hash);
         let notes = env.chain.notifications();
         // (나) 이 블록의 커밋 직후 "결과 모름"을 한 번 주입한다. 커밋은 실제로 됐다
-        env.faults.fail_after_commit(AFTER_BLOCK_COMMIT, 1);
+        env.faults.fail_after_block_commit(1);
         let first = scanner.on_notification(notes[0].clone()).await;
         assert!(
             matches!(first, Err(ScanError::CommitUnknown(_))),
