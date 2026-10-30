@@ -35,7 +35,9 @@
    - `Held`: 요청 저장과 홀드 분개(`wd:hold:{request_id}`)를 한 트랜잭션에서. 잔액이 모자라면 요청은 `Rejected`이고 분개는 없다. 같은 `request_id`가 다시 오면 기존 요청을 돌려준다(I2).
    - `Signed`: 한 트랜잭션에서 nonce 할당 → 서명 → raw tx·tx 해시·nonce 저장. 커밋되지 않은 서명 tx는 절대 보내지 않는다. 커밋이 실패하면 서명 tx도 nonce도 없던 일이 된다(I5).
    - 전송 응답이 `Ok`이거나 `Definite`라도 "already known", "nonce too low", "replacement underpriced"면 `Sent`로 두고 조회로 넘긴다. 이 셋은 "이미 들어갔을 수 있음"이라는 뜻이라 실패가 아니다.
-   - `Indeterminate`면 `Unknown`. `Unknown`과 `Sent`는 같은 조회 루틴으로 결론 낸다.
+   - `Indeterminate`면 `Unknown`.
+   - 그 밖의 `Definite` 오류(예: "insufficient funds", 노드의 일시 거절)도 `Unknown`이다. 이 노드가 지금 거절했다는 사실이 앞서 보낸 같은 tx가 다른 곳에 없다는 증거는 아니다. 전송 오류만으로 `Failed`가 되는 전이는 없다.
+   - `Unknown`과 `Sent`는 같은 조회 루틴으로 결론 낸다. 조회 루틴의 재전송 응답이 `Ok`·"already known"이면 `Sent`, 그 밖이면 상태를 그대로 둔다(되돌아가는 전이 없음).
 3. **결론은 체인 조회로만.** 저장한 tx 해시로 영수증을 조회한다.
    - 영수증이 있고 그 블록의 확정 수가 N 이상이면 status에 따라 `Confirmed`(지급 분개) 또는 `Failed`(가스비 분개 + 홀드 해제). 확정 수 계산은 [ADR-002](002-reorg-handling.md)와 같다.
    - 영수증이 있다가 reorg로 사라지면 `Sent`로 돌아가 같은 raw tx를 다시 보낸다.
