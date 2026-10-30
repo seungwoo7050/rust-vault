@@ -1,13 +1,11 @@
 //! I3 원장 정합성: 모든 회계 거래는 차변과 대변이 일치한다
 
 use proptest::collection::vec;
-use proptest::prelude::*;
 use proptest::test_runner::{TestCaseError, TestRunner};
-use vault::chain::ChainTx;
 use vault::ledger::{self, AccountKey, NewEntry, Posted};
-use vault_sim::chain::transfer;
 use vault_sim::db::TestDb;
 
+use crate::history::{self, Op, Script};
 use crate::model::{self, Expect, Model, Shape};
 use crate::scan::{self, Env};
 
@@ -158,7 +156,7 @@ fn trial_balance_zero_after_reorgs() {
     let rt = model::runtime();
     let mut runner = TestRunner::new(model::config(16));
     runner
-        .run(&vec(history_op(), 0..12), |ops| {
+        .run(&vec(history::op(), 0..12), |ops| {
             // 맨 앞은 언제나 [입금 블록, 스캔, 그 블록을 빼는 깊이 1 reorg, 스캔]. 역분개가 한 번은 일어난다
             let mut seq = vec![
                 Op::Mine(vec![(0, 10)]),
@@ -177,34 +175,6 @@ fn trial_balance_zero_after_reorgs() {
         .unwrap();
 }
 
-/// 체인 이력 한 걸음.
-#[derive(Debug, Clone)]
-enum Op {
-    /// tip 위에 블록 하나. (사용자 순번, 금액) 입금이 들어 있다
-    Mine(Vec<(usize, u128)>),
-    /// tip에서 `depth`(1..N) 아래 블록에서 갈라진 `depth + extra`개짜리 분기를 canonical로 삼는다.
-    /// 분기의 첫 블록에 새 입금과, canonical에서 빠진 tx 중 앞 `reinclude`개를 넣는다(재포함).
-    /// 분기가 예전보다 짧지 않아 tip 번호가 줄지 않는다. 그래서 확정된 입금은 빠지지 않는다(깊이 < N)
-    Reorg {
-        depth: u64,
-        extra: u64,
-        deposits: Vec<(usize, u128)>,
-        reinclude: usize,
-    },
-    Scan,
-}
-
-fn history_op() -> impl Strategy<Value = Op> {
-    let deposits = || vec((0..scan::USERS.len(), 1u128..=1_000), 0..3);
-    prop_oneof![
-        3 => deposits().prop_map(Op::Mine),
-        2 => (1..scan::N, 0u64..=2, deposits(), 0usize..3).prop_map(
-            |(depth, extra, deposits, reinclude)| Op::Reorg { depth, extra, deposits, reinclude }
-        ),
-        2 => Just(Op::Scan),
-    ]
-}
-
 async fn run_history(seq: Vec<Op>) -> Result<(), String> {
     let env = Env::new().await;
     let result = history(&env, seq).await;
@@ -215,60 +185,14 @@ async fn run_history(seq: Vec<Op>) -> Result<(), String> {
 async fn history(env: &Env, seq: Vec<Op>) -> Result<(), String> {
     let chain = &env.chain;
     let mut scanner = env.scanner().await;
-    let mut all_txs: Vec<ChainTx> = vec![];
-    let mut next_id = 0u64;
-    let mut fresh = |deps: &[(usize, u128)], all: &mut Vec<ChainTx>| -> Vec<ChainTx> {
-        deps.iter()
-            .map(|(u, v)| {
-                next_id += 1;
-                let t = transfer(next_id, scan::addr(scan::USERS[*u]), *v);
-                all.push(t);
-                t
-            })
-            .collect()
-    };
-
+    let mut script = Script::new();
     for (i, op) in seq.iter().enumerate() {
         match op {
-            Op::Mine(deps) => {
-                let txs = fresh(deps, &mut all_txs);
-                chain.mine_canonical(chain.tip().hash, txs);
-            }
-            Op::Reorg {
-                depth,
-                extra,
-                deposits,
-                reinclude,
-            } => {
-                let tip = chain.tip().number.0;
-                let depth = (*depth).min(tip);
-                let canonical = chain.canonical_blocks();
-                let fork = canonical[(tip - depth) as usize].header.hash;
-                // 갈라진 곳까지의 canonical에 없는 tx는 모두 "빠진 tx"다(고아 블록에 있었거나 재포함됐다 빠진 것)
-                let kept: Vec<_> = canonical[..=(tip - depth) as usize]
-                    .iter()
-                    .flat_map(|b| b.txs.iter().map(|t| t.hash))
-                    .collect();
-                let mut first = fresh(deposits, &mut all_txs);
-                first.extend(
-                    all_txs
-                        .iter()
-                        .filter(|t| !kept.contains(&t.hash))
-                        .filter(|t| !first.iter().any(|f| f.hash == t.hash))
-                        .take(*reinclude)
-                        .copied()
-                        .collect::<Vec<_>>(),
-                );
-                let mut h = chain.mine(fork, first);
-                for _ in 1..(depth + extra).max(1) {
-                    h = chain.mine(h, vec![]);
-                }
-                chain.set_canonical(h);
-            }
             Op::Scan => scanner
                 .run_until_idle()
                 .await
                 .map_err(|e| format!("{i}번째 스캔 오류: {e}"))?,
+            op => script.apply(chain, op),
         }
     }
     // 끝에 빈 블록 N개를 더하고 head까지 스캔한다
