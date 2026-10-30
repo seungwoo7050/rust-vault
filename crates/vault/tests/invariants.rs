@@ -9,6 +9,8 @@ mod history;
 mod model;
 #[path = "support/scan.rs"]
 mod scan;
+#[path = "support/withdraw.rs"]
+mod withdraw;
 
 #[path = "invariants/i1_asset_safety.rs"]
 mod i1_asset_safety;

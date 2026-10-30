@@ -63,7 +63,7 @@
 | ID | 시나리오 | 테스트 | 넣는 입력과 단언 | 실패해야 할 변형 | 변형을 가릴 수 있는 장치 | 브랜치 |
 | --- | --- | --- | --- | --- | --- | --- |
 | T1.1 | — | `i1_asset_safety::rejected_entry_changes_no_balance` | 한 DB 트랜잭션 안에서 정상 분개와 거부될 분개(없는 계정, 차대 불일치, 사용자 잔액 부족)를 섞은 임의 열을 기록한 뒤 그 트랜잭션을 커밋(proptest). 단언: 커밋이 성공하고, 계정 잔액이 정상 분개만으로 계산한 모델과 같다 | 분개 기록에서 savepoint를 없앰(없는 계정의 FK 위반이 트랜잭션 전체를 중단시키고, 그 트랜잭션의 커밋은 롤백으로 끝나 정상 분개까지 사라진다) | 쓰기 전 Rust 검사(차대·줄 수 거부는 쓰기 전에 걸려 savepoint와 무관하다. 그래서 FK로만 걸리는 없는 계정 입력에 기댄다, ADR-001 결정 8) | 02-ledger |
-| T1.2 | F2 | `i1_asset_safety::pending_deposit_not_spendable` | 확정 수 N−1인 입금 직후 같은 금액의 출금 홀드 분개(`wd:hold:{id}`, ADR-001)를 원장에 직접 기록. 단언: 홀드 분개 `InsufficientFunds(user:u)`(05에서 출금 API의 `Rejected`로 바꾼다), `user:u` = 0, 확정 뒤 같은 금액 홀드 분개는 기록된다(05에서 `Held`) | 잠정 입금을 사용자 계정에 바로 대변 기록 | 없음 | 03-deposit-reorg |
+| T1.2 | F2 | `i1_asset_safety::pending_deposit_not_spendable` | 확정 수 N−1인 입금 직후 같은 금액의 출금 요청(출금 API `request`). 단언: 요청 `Rejected`, 홀드 분개 0개, `user:u` = 0, 확정 뒤 같은 금액 요청은 `Held` | 잠정 입금을 사용자 계정에 바로 대변 기록 | 없음 | 03-deposit-reorg |
 | T1.3 | — | `i1_asset_safety::hold_rejects_overspend` | 잔액보다 큰 출금, 잔액을 나눠 쓰는 동시 출금 두 건. 단언: 큰 출금 `Rejected`, 동시 두 건 중 잔액 안의 것만 `Held`, `user:u` ≥ 0 | 홀드 분개의 사용자 잔액 음수 검사 제거 | 없음 | 05-withdrawal |
 | T2.1 | F1, F7 | `i2_idempotency::same_key_reposted_changes_nothing` | 임의 분개 열에 같은 키 재기록을 무작위 위치로 끼움(proptest). 단언: 잔액·분개 수가 중복 없는 열과 같고, 재기록은 기존 분개 ID를 돌려준다 | 멱등 키 유일 제약과 기존 키 조회 제거 | 없음 | 02-ledger |
 | T2.2 | — | `i2_idempotency::same_key_different_body_rejected` | 같은 키, 다른 금액·계정의 분개. 단언: `IdempotencyConflict` 오류, 기존 분개와 잔액 불변 | 기존 키가 있으면 내용 비교 없이 성공 반환 | 없음 | 02-ledger |
@@ -82,10 +82,10 @@
 | T5.3 | F3, F6 | `i5_recovery::restart_after_sign_resends_same_tx` | 서명 tx 커밋 직후, 전송 직후 종료 후 재시작. 단언: 출금마다 체인 지급 1회, 보낸 raw tx가 저장본과 같다 | 재시작 때 `Signed` 출금에 nonce를 새로 할당해 다시 서명(같은 nonce로 다시 서명하면 결정적 서명이라 같은 바이트가 나와 변형이 안 된다) | 결정적 서명(같은 nonce면 같은 바이트. 그래서 새 nonce로 다시 서명) | 05-withdrawal |
 | T6.1 | F4 | `i6_external_uncertainty::send_timeout_moves_to_unknown` | 전송 요청은 반영하고 응답만 버림. 단언: 상태 `Unknown`, 홀드 유지, 새 서명 tx 0개 | 타임아웃을 `Failed`로 매핑하고 홀드 해제 | 없음 | 05-withdrawal |
 | T6.2 | F4 | `i6_external_uncertainty::lost_response_resolved_by_receipt` | 응답 유실 뒤 조회가 몇 번 타임아웃되고 tx가 채굴됨. (가) 기한 전에 채굴 (나) 가짜 시계를 기한 너머로 돌려 `NeedsReview`가 된 뒤 채굴. 단언: 둘 다 `Confirmed`, 지급 분개 1개, 홀드 해제 분개 0개 | 기한이 지나면 `Unknown`·`NeedsReview`를 `Failed`로 바꾸고 홀드 해제((나)에서 깨진다) | 기한(그래서 가짜 시계로 기한 뒤를 만든다) | 05-withdrawal |
-| T6.3 | F5 | `i6_external_uncertainty::nonce_conflict_never_double_pays` | (가) 전송 직후 종료해 `Signed`로 남은 사이 내 tx가 채굴되고, 재시작 뒤 재전송이 "nonce too low"를 받음 (나) 외부 tx가 같은 nonce를 먼저 씀. 단언: (가) 지급 1회, `Confirmed` (나) `NeedsReview`, 홀드 유지, 우리 지급 0회 | "nonce too low"에서 새 nonce로 다시 서명((가)에서 이중 지급, (나)에서 `NeedsReview`가 아님) | 외부 선점만 넣으면 우리 지급이 1회로 남는다(그래서 (가)를 넣는다) | 05-withdrawal |
+| T6.3 | F5 | `i6_external_uncertainty::nonce_conflict_never_double_pays` | (가) 전송 직후 종료해 `Signed`로 남은 사이 내 tx가 채굴되고, 재시작 뒤 재전송이 "nonce too low"를 받음 (나) 외부 tx가 다음 nonce를 먼저 써서 채굴되고, 그 뒤 우리 출금이 같은 nonce로 서명됨. 단언: (가) 지급 1회, `Confirmed` (나) `NeedsReview`, 홀드 유지, 우리 지급 0회 | "nonce too low"에서 새 nonce로 다시 서명((가)에서 이중 지급, (나)에서 `NeedsReview`가 아님) | 외부 선점만 넣으면 우리 지급이 1회로 남는다(그래서 (가)를 넣는다). 외부 tx가 멤풀에만 있으면 거절이 "replacement underpriced"라 변형이 안 걸린다(그래서 (나)는 외부 tx를 채굴한 뒤 서명하게 한다) | 05-withdrawal |
 | T6.4 | F6 | `i6_external_uncertainty::resend_uses_identical_raw_tx` | 첫 전송은 반영하고 응답만 버린 뒤 `Unknown`에서 여러 번 재전송. 단언: 노드가 받은 raw tx가 모두 저장본과 같고 지급 1회 | 재전송 때마다 nonce를 새로 할당해 다시 서명 | 결정적 서명(T5.3과 같다) | 05-withdrawal |
 | T6.5 | F4 | `i6_external_uncertainty::read_timeout_never_skips_block` | 블록 조회 타임아웃·빈 응답을 입금 블록에 주입. 단언: 커서가 그 블록 앞에 머물고, 조회가 회복되면 입금이 한 번 반영되고, 역분개 0개 | 조회 실패 블록을 빈 블록으로 보고 커서 전진 | 없음 | 03-deposit-reorg |
-| T6.6 | F3, F4, F5, F6 | `i6_external_uncertainty::random_send_faults_pay_at_most_once` | 응답 유실·타임아웃·nonce 충돌·재시작을 무작위로 섞은 출금 열(proptest). 출금 요청마다 체인 지급 수 ≤ 1, 원장 출금액 = 체인 지급액 | T6.1, T6.3, T6.4의 변형 중 어느 하나 | T6.1·T6.3·T6.4 행 참조 | 05-withdrawal |
+| T6.6 | F3, F4, F5, F6 | `i6_external_uncertainty::random_send_faults_pay_at_most_once` | 응답 유실·타임아웃·nonce 충돌·재시작을 무작위로 섞은 출금 열(proptest). 출금 요청마다 체인 지급 수 ≤ 1, 원장 출금액 = 체인 지급액 | T6.1, T6.3, T6.4의 변형 중 어느 하나(`mutants/T6.6`은 T6.4의 변형) | T6.1·T6.3·T6.4 행 참조. 끝의 마무리 처리가 채굴 전에 조회 루틴을 돌려 재전송이 언제나 일어난다 | 05-withdrawal |
 
 ## 바꾸는 법
 

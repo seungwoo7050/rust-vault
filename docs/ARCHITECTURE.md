@@ -8,7 +8,7 @@
                  ┌──────────────────────── vault (lib) ────────────────────────┐
  새 head 알림 ──▶ │ deposit::Scanner ──┐                                         │
  (순서·중복 무관)  │                    ├──▶ ledger (분개·멱등 키·잔액=분개 합)    │
- 출금 요청 ─────▶ │ withdrawal::Machine┘          │                              │
+ 출금 요청 ─────▶ │ withdrawal::Processor┘        │                              │
                  │      │  │                     ▼                              │
                  │      │  └─ signer::Signer   store (Postgres, 한 트랜잭션 단위) │
                  │      ▼                                                       │
@@ -29,10 +29,11 @@
 | | `store` | 연결 풀, 마이그레이션, 트랜잭션 경계(커밋 도우미 `commit`), 장애 주입 자리(`Faults` trait와 `FaultPoint`, 운영 기본값 `NoFaults`), 일시 DB 오류 분류 | 02, 03, 04 |
 | | `chain` | `ChainClient` trait, `RpcOutcome { Ok, Definite, Indeterminate }`, 블록·영수증·tx 타입 | 03 |
 | | `deposit` | 스캐너: 커서, 블록 헤더 저장, reorg 감지·되감기, 잠정 입금·확정 | 03 |
-| | `withdrawal` | 출금 상태 기계, nonce 할당, 서명 tx 저장, 재전송·조회 루틴 | 05 |
-| | `signer` | `Signer` trait와 로컬 키 구현 | 05 |
+| | `withdrawal` | 출금 요청·홀드(`request`), 상태 기계 처리기(`Processor`): nonce 할당, 서명 tx 저장, 재전송·조회 루틴 | 05 |
+| | `signer` | `Signer` trait와 로컬 키 구현(alloy, EIP-1559 전송), raw tx 해석(`decode`) | 05 |
+| | `clock` | `Clock` trait와 운영 시계. `NeedsReview` 기한 | 05 |
 | | `recon` | 온체인 잔액·tx와 원장 대사 리포트 | 06 |
-| `vault-sim` | (테스트 지원) | `FakeChain`(분기 트리, canonical 선택, 장애 주입), 장애 주입 지점 구현, 시나리오 빌더 | 03부터 |
+| `vault-sim` | (테스트 지원) | `FakeChain`(분기 트리, canonical 선택, 계정 nonce·멤풀, 장애 주입), 장애 주입 지점 구현, 가짜 시계, 테스트 키, 시나리오 빌더 | 03부터 |
 
 불변조건 테스트(`tests/invariants/`)는 `vault`의 공개 API와 `vault-sim`만 쓴다. 내부 함수를 직접 부르지 않는다. 그래야 "실패해야 할 변형"이 공개 동작으로 드러난다. 예외는 테스트 DB에 대한 직접 SQL 두 가지다: 앱 검증을 우회하는 경로를 흉내 내는 쓰기(T3.2), 그리고 단언을 위한 읽기(분개 수, 커서, 헤더).
 
@@ -50,8 +51,8 @@
 | `deposits` | tx 해시, 블록 해시, 블록 안 위치, 주소, 사용자, 금액, 상태 | 블록 처리·되감기 |
 | `finality_violations` | 종류, 블록, tx, 금액, 시각 | 되감기 중 정책 위반 |
 | `scanner_state` | 정지 여부, 사유 | 되감기 중 정책 위반, 고아 블록 재등장 |
-| `withdrawals` | 요청 ID(유일), 사용자, 수취인, 금액, 상태 | 상태 전이마다 |
-| `signed_txs` | 요청 ID, nonce, raw tx, tx 해시 | `Held → Signed` |
+| `withdrawals` | 요청 ID(유일), 사용자, 수취인, 금액, 상태, 상태 시각, 결론 낸 영수증의 블록 해시 | 요청(홀드 분개), 상태 전이마다(결론이면 지급·가스비·해제 분개) |
+| `signed_txs` | 요청 ID(유일), 보낸 주소, nonce(주소와 함께 유일), raw tx, tx 해시(유일), 서명 시각 | `Held → Signed` |
 | `wallet_nonces` | 주소, 다음 nonce | `Held → Signed` |
 
 ## 결정

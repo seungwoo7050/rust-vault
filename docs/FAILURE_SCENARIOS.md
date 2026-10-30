@@ -18,5 +18,5 @@
 ## 시나리오를 테스트로 만들 때
 
 - 가짜 체인(`vault-sim`)이 F1·F2·F4·F5·F6·F8을 주입한다: 같은 블록 재전달, 분기 만들기·바꾸기, 응답 버리기(요청은 반영), nonce 선점, 이벤트 섞기.
-- F3·F7은 장애 주입 지점(`store::FaultPoint`)으로 만든다: 이벤트 수신 직후(`BlockFetched`), 분개 기록 중간(`BlockEntriesWritten`: 분개는 썼고 커서 전진 전), 각 DB 커밋 직전(`BeforeCommit(Site)`), 각 DB 커밋 직후(`AfterCommit(Site)`: 커밋은 됐지만 호출자에게 오류를 돌려줌). `Site`는 `Block`(블록 처리)과 `Rewind`(되감기)다. 커밋 지점은 모든 커밋이 거치는 도우미 `store::commit`에 걸리므로, 구현이 트랜잭션을 나누면 나뉜 커밋 사이에도 자동으로 주입된다. 주입은 지점마다 `Faults::hit` 하나로 하고 종류는 종료(`Crash`), 일시 DB 오류(`Transient`), 커밋 결과 모름(`CommitOutcomeUnknown`)이다. 각 지점의 k번째 통과에서 종료한 뒤 재시작해 장애 없는 실행과 최종 원장을 비교하고(F3), 일시 오류는 재시작 없이 재시도해 비교한다(F7).
+- F3·F7은 장애 주입 지점(`store::FaultPoint`)으로 만든다: 이벤트 수신 직후(`BlockFetched`), 분개 기록 중간(`BlockEntriesWritten`: 분개는 썼고 커서 전진 전), 각 DB 커밋 직전(`BeforeCommit(Site)`), 각 DB 커밋 직후(`AfterCommit(Site)`: 커밋은 됐지만 호출자에게 오류를 돌려줌). `Site`는 `Block`(블록 처리), `Rewind`(되감기), `Withdrawal`(출금 상태 전이 하나)이다. 출금에는 전송 직후 지점(`AfterSend`: 전송 응답을 받고 상태를 쓰기 전)이 더 있다. 커밋 지점은 모든 커밋이 거치는 도우미 `store::commit`에 걸리므로, 구현이 트랜잭션을 나누면 나뉜 커밋 사이에도 자동으로 주입된다. 주입은 지점마다 `Faults::hit` 하나로 하고 종류는 종료(`Crash`), 일시 DB 오류(`Transient`), 커밋 결과 모름(`CommitOutcomeUnknown`)이다. 각 지점의 k번째 통과에서 종료한 뒤 재시작해 장애 없는 실행과 최종 원장을 비교하고(F3), 일시 오류는 재시작 없이 재시도해 비교한다(F7).
 - 주입은 테스트 전용 설정으로만 켠다. 운영 코드 경로에 `if test` 분기를 두지 않고, 주입 지점은 trait 경계(체인 클라이언트, 저장소)에서 감싼다.

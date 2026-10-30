@@ -9,8 +9,11 @@ use vault::ledger::{self, AccountKey, EntryId, NewEntry, PostError, Posted};
 use vault_sim::chain::transfer;
 use vault_sim::db::TestDb;
 
+use vault::withdrawal::{Status, Step};
+
 use crate::model::{self, Expect, Model, Shape};
 use crate::scan::{self, Env};
+use crate::withdraw::{self, WEnv};
 
 // T2.1 실패해야 할 변형: 멱등 키 유일 제약과 기존 키 조회 제거
 #[test]
@@ -284,10 +287,48 @@ async fn duplicate_block_events_credit_once() {
 }
 
 // T2.4 실패해야 할 변형: `withdrawals.request_id` 유일 제약과 기존 요청 조회를 제거(홀드 키는 그대로 두어도 두 번째 출금 행이 따로 서명·지급된다)
-#[test]
-#[ignore = "05-withdrawal"]
-fn retried_withdrawal_request_holds_once() {
-    unimplemented!(
-        "T2.4: 같은 출금 요청 ID를 여러 번 제출(재시작 사이에도). 단언: 출금 행 1개, 홀드 분개 1개, 체인 지급 1회"
+#[tokio::test]
+async fn retried_withdrawal_request_holds_once() {
+    let w = WEnv::new().await;
+    w.deposit(1, 100).await;
+    let to = withdraw::recipient(1);
+    let id = "t2.4";
+
+    // 처음 제출과 곧바로 다시 제출
+    assert_eq!(w.request(id, 1, to, 30).await.status, Status::Held);
+    assert_eq!(w.request(id, 1, to, 30).await.status, Status::Held);
+
+    // 서명까지 하고 재시작한 뒤 다시 제출
+    let mut p = w.processor().await;
+    let first = p.step().await.unwrap();
+    assert!(
+        matches!(
+            &first,
+            Step::Moved {
+                to: Status::Signed,
+                ..
+            }
+        ),
+        "첫 step은 서명: {first:?}"
     );
+    drop(p);
+    assert_eq!(w.request(id, 1, to, 30).await.status, Status::Signed);
+
+    // 재시작한 처리기로 끝까지(전송·확정) 돌리고, 그 사이와 뒤에도 다시 제출
+    let mut p = w.processor().await;
+    p.run_until_idle().await.unwrap();
+    w.request(id, 1, to, 30).await;
+    w.settle(&mut p, scan::N as usize + 1).await;
+    drop(p);
+    let mut p = w.processor().await;
+    assert_eq!(w.request(id, 1, to, 30).await.status, Status::Confirmed);
+    w.settle(&mut p, scan::N as usize + 1).await;
+
+    assert_eq!(w.rows(id).await, 1, "출금 행 수");
+    assert_eq!(w.entries("wd:hold:").await, 1, "홀드 분개 수");
+    assert_eq!(w.payments_to(to).len(), 1, "체인 지급 수");
+    assert_eq!(w.status(id).await, Status::Confirmed);
+    assert_eq!(w.balance(&AccountKey::user(1)).await, 70);
+
+    w.env.db.drop_db().await;
 }

@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-# DB가 있어야 도는 테스트(tests/db.rs, tests/ledger.rs, tests/deposit.rs, tests/invariants.rs)를 켠다. verify.sh full이 켠다
+# DB가 있어야 도는 테스트(tests/db.rs, tests/ledger.rs, tests/deposit.rs, tests/withdrawal.rs, tests/invariants.rs)를 켠다. verify.sh full이 켠다
 db = []
 
 [dependencies]
@@ -37,4 +37,9 @@ required-features = ["db"]
 [[test]]
 name = "deposit"
 path = "tests/deposit.rs"
+required-features = ["db"]
+
+[[test]]
+name = "withdrawal"
+path = "tests/withdrawal.rs"
 required-features = ["db"]
