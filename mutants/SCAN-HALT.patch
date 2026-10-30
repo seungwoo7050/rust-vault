@@ -1,0 +1,12 @@
+--- a/crates/vault/src/deposit.rs
++++ b/crates/vault/src/deposit.rs
+@@ -181,9 +181,6 @@
+     /// 블록 하나를 처리하거나 한 번 되감는다. 할 일이 없으면 `Step::Idle`.
+     pub async fn step(&mut self) -> Result<Step, ScanError> {
+         // 정지는 DB에 있어서 재시작해도 유지된다. 사람이 풀기 전에는 체인도 묻지 않는다
+-        if let Some(reason) = halted(&mut *self.pool.acquire().await?).await? {
+-            return Err(ScanError::Halted(reason));
+-        }
+         // 커밋 결과를 모르는 블록은 커서와 상관없이 같은 블록을 다시 처리한다(ADR-002 결정 3).
+         // 커밋이 됐다면 멱등 키와 조건부 커서 전진이 흡수하고, 안 됐다면 처음 처리와 같다
+         if let Some(block) = self.retry.take() {

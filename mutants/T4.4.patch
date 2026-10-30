@@ -1,0 +1,23 @@
+--- a/crates/vault/src/deposit.rs
++++ b/crates/vault/src/deposit.rs
+@@ -521,16 +521,15 @@
+     h: BlockNumber,
+     confirmations: u64,
+ ) -> Result<(), ScanError> {
+-    let Some(deepest) = (h.0 + 1).checked_sub(confirmations) else {
+-        return Ok(());
+-    };
+     let rows: Vec<DepositRow> = sqlx::query_as(
+         "SELECT d.tx_hash, d.block_hash, d.address, d.user_id, d.amount::text
+            FROM deposits d JOIN block_headers b ON b.hash = d.block_hash
+-          WHERE d.status = 'pending' AND NOT b.orphaned AND b.number <= $1
++          WHERE d.status = 'pending' AND NOT b.orphaned
++            AND (SELECT count(*) FROM block_headers x WHERE x.number >= b.number AND x.number <= $1) >= $2
+           ORDER BY b.number, d.position",
+     )
+-    .bind(db_number(BlockNumber(deepest))?)
++    .bind(db_number(h)?)
++    .bind(confirmations as i64)
+     .fetch_all(&mut **tx)
+     .await?;
+     for row in rows {
