@@ -1,0 +1,2 @@
+# 분개 줄 기록 루프가 마지막 줄을 빠뜨리는 변형(T3.1). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i3_ledger_balance::every_posted_entry_sums_to_zero --exact

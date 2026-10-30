@@ -1,0 +1,19 @@
+--- a/crates/vault/migrations/0002_ledger.sql
++++ b/crates/vault/migrations/0002_ledger.sql
+@@ -63,16 +63,6 @@
+ $$;
+ 
+ -- 줄을 넣은 분개와, 줄이 하나도 없는 분개 둘 다 커밋 때 걸린다
+-CREATE CONSTRAINT TRIGGER journal_lines_balanced
+-    AFTER INSERT ON journal_lines
+-    DEFERRABLE INITIALLY DEFERRED
+-    FOR EACH ROW EXECUTE FUNCTION journal_lines_balanced();
+-
+-CREATE CONSTRAINT TRIGGER journal_entries_balanced
+-    AFTER INSERT ON journal_entries
+-    DEFERRABLE INITIALLY DEFERRED
+-    FOR EACH ROW EXECUTE FUNCTION journal_entries_balanced();
+-
+ -- 추가 전용(ADR-001 결정 2). 고칠 일은 역분개로만 한다. 테스트·로컬 사용자가 superuser라
+ -- REVOKE로는 막히지 않으므로 트리거로 막는다
+ CREATE FUNCTION journal_append_only() RETURNS trigger

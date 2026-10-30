@@ -12,6 +12,7 @@
 | `scripts/check-public.sh` | 공개 금지 문자열 검사(full에 포함) |
 
 - DB 테스트는 `--features db`로만 돈다. `DATABASE_URL`은 `.env.example`의 값이 기본이다.
+- 불변조건 테스트(`--test invariants`)도 db 기능이 있어야 빌드된다. 그래서 `mutants.sh`로 원장 변형을 볼 때는 Postgres를 먼저 띄우고(`docker compose up -d --wait postgres`) `DATABASE_URL`을 내보낸다.
 - 보고하는 숫자는 `verify:` 요약 줄을 그대로 옮긴다.
 
 ## 증명 테스트 규칙

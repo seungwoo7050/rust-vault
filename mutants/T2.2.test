@@ -1,0 +1,2 @@
+# 기존 키가 있으면 내용 비교 없이 성공을 돌려주는 변형(T2.2). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i2_idempotency::same_key_different_body_rejected --exact

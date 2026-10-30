@@ -6,12 +6,25 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-# DB가 있어야 도는 테스트(tests/db.rs)를 켠다. verify.sh full이 켠다
+# DB가 있어야 도는 테스트(tests/db.rs, tests/ledger.rs, tests/invariants.rs)를 켠다. verify.sh full이 켠다
 db = []
 
 [dependencies]
+sha2.workspace = true
 sqlx.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 tokio.workspace = true
 vault-sim = { path = "../vault-sim" }
+
+# 불변조건 증명 테스트는 DB가 있어야 돈다. verify fast는 DB 없이 돌므로 db 기능이 켜졌을 때만 빌드한다
+[[test]]
+name = "invariants"
+path = "tests/invariants.rs"
+required-features = ["db"]
+
+[[test]]
+name = "ledger"
+path = "tests/ledger.rs"
+required-features = ["db"]

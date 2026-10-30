@@ -1,0 +1,11 @@
+--- a/crates/vault/src/ledger.rs
++++ b/crates/vault/src/ledger.rs
+@@ -394,7 +394,7 @@
+         }
+     };
+ 
+-    for line in &entry.lines {
++    for line in &entry.lines[..entry.lines.len() - 1] {
+         let r = sqlx::query(
+             "INSERT INTO journal_lines (entry_id, account_key, amount) VALUES ($1, $2, $3::numeric)",
+         )

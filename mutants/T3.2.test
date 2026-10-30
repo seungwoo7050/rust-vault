@@ -1,0 +1,2 @@
+# 커밋 시점 차대 검사 트리거를 없앤 변형(T3.2). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i3_ledger_balance::db_rejects_unbalanced_entry --exact

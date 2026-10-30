@@ -1,0 +1,14 @@
+--- a/crates/vault/src/ledger.rs
++++ b/crates/vault/src/ledger.rs
+@@ -385,11 +385,6 @@
+             .bind(&entry.idempotency_key)
+             .fetch_one(&mut *conn)
+             .await?;
+-            if existing != hash {
+-                return Err(Written::Rejected(PostError::IdempotencyConflict(
+-                    entry.idempotency_key.clone(),
+-                )));
+-            }
+             return Ok(Posted::Existing(EntryId(id)));
+         }
+     };

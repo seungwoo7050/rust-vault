@@ -1,0 +1,13 @@
+--- a/crates/vault/src/ledger.rs
++++ b/crates/vault/src/ledger.rs
+@@ -418,10 +418,6 @@
+     keys.sort();
+     keys.dedup();
+     let names: Vec<String> = keys.iter().map(|k| k.as_str().to_owned()).collect();
+-    sqlx::query("SELECT key FROM accounts WHERE key = ANY($1) ORDER BY key FOR NO KEY UPDATE")
+-        .bind(names)
+-        .fetch_all(&mut *conn)
+-        .await?;
+     for key in keys {
+         if balance(conn, key).await? < 0 {
+             return Err(Written::Rejected(PostError::InsufficientFunds(key.clone())));
