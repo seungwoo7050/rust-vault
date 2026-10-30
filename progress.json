@@ -12,8 +12,8 @@
   },
   "current": {
     "branch": "02-ledger",
-    "stage": "brief",
-    "note": "01-harness 완료. 다음: 02-ledger 브리프. devlog 서브에이전트 진행 중"
+    "stage": "implement",
+    "note": "브리프 briefs/02-ledger.md 확정. 구현 worktree ../rust-vault-02-ledger(01-harness @ 6025d0c에서). 구현 서브에이전트 진행 중"
   },
   "branches": {
     "00-charter": {
