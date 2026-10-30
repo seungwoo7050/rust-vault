@@ -1,0 +1,77 @@
+# 아키텍처
+
+확정: 오케스트레이터. crate를 2개로 둔 결정은 출처: 사람 설계.
+
+## 한눈에
+
+```
+                 ┌──────────────────────── vault (lib) ────────────────────────┐
+ 새 head 알림 ──▶ │ deposit::Scanner ──┐                                         │
+ (순서·중복 무관)  │                    ├──▶ ledger (분개·멱등 키·잔액=분개 합)    │
+ 출금 요청 ─────▶ │ withdrawal::Machine┘          │                              │
+                 │      │  │                     ▼                              │
+                 │      │  └─ signer::Signer   store (Postgres, 한 트랜잭션 단위) │
+                 │      ▼                                                       │
+                 │  chain::ChainClient (trait) ◀── recon (06)                    │
+                 └──────┬───────────────────────────────────────────────────────┘
+                        │ 구현
+          ┌─────────────┴──────────────┐
+   vault-sim::FakeChain           AnvilClient (06, --features anvil)
+   (분기·reorg·중복·응답 유실·        (실제 노드로 reorg PoC)
+    nonce 선점·장애 주입)
+```
+
+## crate와 모듈
+
+| crate | 모듈 | 책임 | 브랜치 |
+| --- | --- | --- | --- |
+| `vault` | `ledger` | 분개 검증·기록, 멱등 키, 잔액 조회. 스스로 커밋하지 않고 받은 트랜잭션 안에서만 쓴다 | 02 |
+| | `store` | 연결 풀, 마이그레이션, 트랜잭션 경계, 장애 주입 지점을 끼울 수 있는 얇은 래퍼 | 02, 04 |
+| | `chain` | `ChainClient` trait, `RpcOutcome { Ok, Definite, Indeterminate }`, 블록·영수증·tx 타입 | 03 |
+| | `deposit` | 스캐너: 커서, 블록 헤더 저장, reorg 감지·되감기, 잠정 입금·확정 | 03 |
+| | `withdrawal` | 출금 상태 기계, nonce 할당, 서명 tx 저장, 재전송·조회 루틴 | 05 |
+| | `signer` | `Signer` trait와 로컬 키 구현 | 05 |
+| | `recon` | 온체인 잔액·tx와 원장 대사 리포트 | 06 |
+| `vault-sim` | (테스트 지원) | `FakeChain`(분기 트리, canonical 선택, 장애 주입), 장애 주입 지점 구현, 시나리오 빌더 | 03부터 |
+
+불변조건 테스트(`tests/invariants/`)는 `vault`의 공개 API와 `vault-sim`만 쓴다. 내부 함수를 직접 부르지 않는다. 그래야 "실패해야 할 변형"이 공개 동작으로 드러난다.
+
+## 저장소(Postgres) 초안
+
+테이블 이름과 열은 각 브랜치에서 마이그레이션으로 확정한다. 아래는 트랜잭션 경계를 정하기 위한 초안이다.
+
+| 테이블 | 주요 열 | 같은 트랜잭션으로 묶이는 것 |
+| --- | --- | --- |
+| `accounts` | `id`, `kind`, `owner` | 사용자 계정 행 잠금(음수 검사) |
+| `journal_entries` / `journal_lines` | 키(유일), 내용 해시 / 계정, 금액 | 모든 쓰기의 중심 |
+| `deposit_addresses` | 주소 → 사용자 | 읽기 전용(설정) |
+| `block_headers` | 번호, 해시, 부모 해시, 고아 여부 | 블록 처리·되감기 |
+| `scan_cursor` | 번호, 해시 | 블록 처리·되감기 |
+| `deposits` | tx 해시, 블록 해시, 사용자, 금액, 상태 | 블록 처리·되감기 |
+| `finality_violations` | 블록, tx, 금액, 시각 | 되감기 중 정책 위반 |
+| `withdrawals` | 요청 ID(유일), 사용자, 수취인, 금액, 상태 | 상태 전이마다 |
+| `signed_txs` | 요청 ID, nonce, raw tx, tx 해시 | `Held → Signed` |
+| `wallet_nonces` | 주소, 다음 nonce | `Held → Signed` |
+
+## 결정
+
+| 결정 | 대안과 고르지 않은 이유 | 바꿀 신호 |
+| --- | --- | --- |
+| crate 2개(`vault`, `vault-sim`), 경계는 모듈로 (출처: 사람 설계) | 기능별 crate 5개: 읽는 사람이 열 곳만 늘고 경계 이득이 없다 | 모듈 하나를 다른 프로세스로 띄워야 할 때 |
+| Postgres + sqlx | SQLite: 커밋 시점 제약(`DEFERRABLE`)과 행 잠금이 약해 I3·I1 장치를 같은 모양으로 못 만든다. 메모리 저장: 재시작이 없어 I5를 증명할 수 없다 | 없음(정확성 장치가 Postgres 기능에 기대므로 바꾸려면 ADR-001부터 다시 쓴다) |
+| 모든 상태(원장·커서·헤더·출금)를 한 DB에 | 커서를 파일이나 Redis에: 원장과 한 트랜잭션으로 못 묶어 F3에서 어긋난다 | 없음 |
+| 체인은 trait 뒤, 테스트는 `FakeChain` | 모든 테스트를 anvil로: reorg·응답 유실을 원하는 지점에 주입하기 어렵고 느리다 | 가짜 체인과 실제 노드의 동작 차이가 06 PoC에서 발견될 때(그 차이를 가짜 체인에 반영) |
+| EVM 타입·RLP·서명은 alloy를 쓴다 | 직접 구현: 서명·인코딩 버그가 불변조건과 무관한 곳에서 생긴다 | alloy의 큰 호환성 변경이 구현 시간을 잡아먹을 때 버전 고정 |
+| 단일 프로세스·단일 writer | 다중 인스턴스 + 리더 선출: 운영 부하가 없고 증명 범위만 커진다 | 가용성 요구가 생기면 Postgres advisory lock으로 단일 writer 강제 |
+| 비동기(tokio) | 동기 Postgres 클라이언트: sqlx가 비동기이고, 체인 RPC 타임아웃을 `tokio::time::timeout`으로 다루기 쉽다 | 없음 |
+| 장애 주입은 프로세스 안에서: 주입 지점에서 오류를 내고, "재시작"은 DB를 뺀 모든 객체를 새로 만든다 | 실제 프로세스 kill: 실제에 가깝지만 느리고 결과가 들쭉날쭉하다 | 메모리 상태가 재시작을 넘어 새는 버그가 나오면 서브프로세스 kill 테스트를 하나 더한다 |
+| 주입 지점은 trait 경계(`ChainClient`, `store` 래퍼)에만 | 운영 코드에 `cfg(test)` 분기: 테스트한 코드와 운영 코드가 달라진다 | 없음 |
+| 테스트 DB는 docker의 Postgres 하나, 테스트마다 새 데이터베이스 | 테스트마다 컨테이너: 느리다. 한 DB 공유: 테스트끼리 섞인다 | CI 병렬 실행에서 DB 생성이 병목이 될 때 템플릿 DB 복제로 |
+
+## 처리 흐름
+
+**입금(03)** 알림 → 스캐너가 커서+1 블록 요청 → 부모 해시가 같으면 한 트랜잭션에서 헤더 저장·잠정 입금·확정·커서 전진, 다르면 되감기 트랜잭션 후 다시 앞으로. 자세한 규칙은 [ADR-002](adr/002-reorg-handling.md).
+
+**출금(05)** 요청 → 홀드 트랜잭션 → 서명 트랜잭션(nonce·raw tx 저장) → 커밋 뒤 전송 → `Sent`/`Unknown` → 조회 루틴 → `Confirmed`/`Failed`/`NeedsReview`. 자세한 규칙은 [ADR-003](adr/003-nonce-and-rpc-uncertainty.md).
+
+**재시작(04)** DB에서 커서와 미완료 출금을 읽는다. 커서 다음 블록부터 스캔하고, `Signed`는 같은 raw tx를 다시 보내고, `Sent`·`Unknown`은 조회 루틴에 넣는다. 메모리에서 이어받는 것은 없다.
