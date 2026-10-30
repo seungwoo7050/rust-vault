@@ -1,0 +1,47 @@
+--- a/crates/vault/migrations/0002_ledger.sql
++++ b/crates/vault/migrations/0002_ledger.sql
+@@ -12,7 +12,7 @@
+ -- 분개. 멱등 키는 외부 사실로만 만들고(ADR-001 결정 6), 같은 키의 재기록은 body_hash로 같은 내용인지 본다
+ CREATE TABLE journal_entries (
+     id              bigserial   PRIMARY KEY,
+-    idempotency_key text        NOT NULL UNIQUE,
++    idempotency_key text        NOT NULL,
+     kind            text        NOT NULL,
+     body_hash       bytea       NOT NULL,
+     created_at      timestamptz NOT NULL DEFAULT now()
+--- a/crates/vault/src/ledger.rs
++++ b/crates/vault/src/ledger.rs
+@@ -368,7 +368,7 @@
+ ) -> Result<Posted, Written> {
+     let inserted: Option<i64> = sqlx::query_scalar(
+         "INSERT INTO journal_entries (idempotency_key, kind, body_hash) VALUES ($1, $2, $3)
+-         ON CONFLICT (idempotency_key) DO NOTHING RETURNING id",
++         RETURNING id",
+     )
+     .bind(&entry.idempotency_key)
+     .bind(&entry.kind)
+@@ -376,23 +376,7 @@
+     .fetch_optional(&mut *conn)
+     .await?;
+ 
+-    let id = match inserted {
+-        Some(id) => id,
+-        None => {
+-            let (id, existing): (i64, Vec<u8>) = sqlx::query_as(
+-                "SELECT id, body_hash FROM journal_entries WHERE idempotency_key = $1",
+-            )
+-            .bind(&entry.idempotency_key)
+-            .fetch_one(&mut *conn)
+-            .await?;
+-            if existing != hash {
+-                return Err(Written::Rejected(PostError::IdempotencyConflict(
+-                    entry.idempotency_key.clone(),
+-                )));
+-            }
+-            return Ok(Posted::Existing(EntryId(id)));
+-        }
+-    };
++    let id = inserted.expect("INSERT … RETURNING id");
+ 
+     for line in &entry.lines {
+         let r = sqlx::query(

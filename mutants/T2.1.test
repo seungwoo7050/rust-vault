@@ -1,0 +1,2 @@
+# 멱등 키 유일 제약과 기존 키 조회를 없앤 변형(T2.1). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i2_idempotency::same_key_reposted_changes_nothing --exact

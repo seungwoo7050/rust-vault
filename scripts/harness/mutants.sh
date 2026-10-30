@@ -22,10 +22,12 @@ if [ "${#ids[@]}" -eq 0 ]; then echo "mutants: 변형 없음 ($dir)"; exit 0; fi
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/mutants.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
-# 추적 파일과 무시되지 않은 미추적 파일(커밋 전 변경 포함)을 사본으로 옮긴다
+# 추적 파일과 무시되지 않은 미추적 파일(커밋 전 변경 포함)을 사본으로 옮긴다.
+# 사본들이 CARGO_TARGET_DIR를 같이 쓰고 cargo는 mtime으로 신선도를 보므로, 원본 mtime을 살리면
+# 앞 사본의 변형 빌드가 다음 사본의 기준 실행에 그대로 쓰인다. 그래서 풀 때 mtime을 지금으로 둔다(-m)
 copy_tree() {
   mkdir -p "$1"
-  (cd "$root" && git ls-files -co --exclude-standard -z . | xargs -0 tar cf - 2>/dev/null) | (cd "$1" && tar xf -)
+  (cd "$root" && git ls-files -co --exclude-standard -z . | xargs -0 tar cf - 2>/dev/null) | (cd "$1" && tar xmf -)
 }
 
 # cargo test 출력에서 돈 테스트 수(passed + failed)를 센다

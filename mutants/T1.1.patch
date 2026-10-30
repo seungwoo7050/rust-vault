@@ -1,0 +1,17 @@
+--- a/crates/vault/src/ledger.rs
++++ b/crates/vault/src/ledger.rs
+@@ -296,13 +296,7 @@
+     let hash = body_hash(&entry);
+ 
+     // 거부되면 이 분개의 흔적만 되돌린다. FK 위반 같은 DB 오류가 바깥 트랜잭션을 중단시키지 않는다
+-    let mut sp = tx.begin().await?;
+-    let result = write_entry(&mut sp, &entry, &hash).await;
+-    if result.is_ok() {
+-        sp.commit().await?;
+-    } else {
+-        sp.rollback().await?;
+-    }
++    let result = write_entry(tx, &entry, &hash).await;
+ 
+     match result {
+         Ok(posted) => Ok(posted),

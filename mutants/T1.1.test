@@ -1,0 +1,2 @@
+# 분개 기록에서 savepoint를 없앤 변형(docs/SYSTEM_INVARIANTS.md T1.1). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i1_asset_safety::rejected_entry_changes_no_balance --exact
