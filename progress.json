@@ -5,15 +5,15 @@
     "commit": "6b4a912"
   },
   "baseline": {
-    "commit": "6025d0c",
-    "note": "01-harness 끝. 02-ledger의 시작 기준점",
-    "verify": "fmt ✓ clippy ✓ test 0/0 db 1/1 ignored 24 invariants ✓ guards ✓ public ✓",
+    "commit": "4b14e37",
+    "note": "02-ledger 끝. 03의 시작 기준점",
+    "verify": "fmt ✓ clippy ✓ test 4/4 db 11/11 ignored 19 invariants ✓ guards ✓ public ✓ (메인 실행)",
     "tools": "cargo 1.97.1, anvil 1.8.7(~/.foundry/bin, PATH에 없을 수 있음), docker"
   },
   "current": {
-    "branch": "02-ledger",
-    "stage": "implement",
-    "note": "브리프 briefs/02-ledger.md 확정. 구현 worktree ../rust-vault-02-ledger(01-harness @ 6025d0c에서). 구현 서브에이전트 진행 중"
+    "branch": "03-deposit-reorg",
+    "stage": "brief",
+    "note": "02-ledger 완료(4b14e37). 다음: 03 브리프(guide 대상). 02 devlog 서브에이전트 진행 중"
   },
   "branches": {
     "00-charter": {
@@ -50,6 +50,28 @@
       ],
       "verify": "fmt ✓ clippy ✓ test 0/0 db 1/1 ignored 24 invariants ✓ guards ✓ public ✓ (메인 실행)",
       "done": "2026-10-30"
+    },
+    "02-ledger": {
+      "commits": [
+        "e841ae0",
+        "5589cf7",
+        "da9b932",
+        "4b14e37"
+      ],
+      "worktree": "../rust-vault-02-ledger",
+      "proved": [
+        "T1.1",
+        "T2.1",
+        "T2.2",
+        "T3.1",
+        "T3.2"
+      ],
+      "eval": [
+        "1차 통과(기준 1–5), 표 밖 변형 \"계정 잠금 제거\"가 가려짐(동시 출금으로 음수) → 동시 출금 테스트와 mutants/LEDGER-LOCK 추가(4b14e37)"
+      ],
+      "verify": "fmt ✓ clippy ✓ test 4/4 db 11/11 ignored 19 invariants ✓ guards ✓ public ✓ (메인 실행)",
+      "mutants": "잡힘 6 가려짐 0 기타 0 (메인 실행)",
+      "done": "2026-10-30"
     }
   },
   "blocked": [
@@ -72,6 +94,7 @@
   ],
   "deferred": [
     "stop.sh의 STOP_VERIFY_CMD 환경 변수 덮어쓰기: 테스트용이지만 훅 환경에서 설정되면 Stop 검증을 바꿀 수 있다. 오용 사례가 나오면 테스트 전용 경로로 좁힌다",
-    "컴포즈 호스트 포트 55433(5433은 다른 프로젝트가 사용)"
+    "컴포즈 호스트 포트 55433(5433은 다른 프로젝트가 사용)",
+    "02-ledger guide(ROADMAP \"여유 있으면\"): 03 guide를 먼저 한다"
   ]
 }
