@@ -1,0 +1,22 @@
+{
+  "updated": "2026-10-30",
+  "start_point": {
+    "branch": "main",
+    "commit": "6b4a912"
+  },
+  "baseline": {
+    "commit": "6b4a912",
+    "note": "코드 없음. verify는 01-harness부터 생긴다"
+  },
+  "current": {
+    "branch": "00-charter",
+    "stage": "brief",
+    "note": "다음 세션: 0절 루틴 → 00-charter 브리프 확정 → 문서 작성 → 평가"
+  },
+  "branches": {},
+  "blocked": [],
+  "push_policy": "로컬 커밋만. 원격 저장소 생성과 푸시는 사람에게 묻는다.",
+  "needs_human": [],
+  "harness_gaps": [],
+  "deferred": []
+}
