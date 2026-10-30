@@ -6,8 +6,10 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-# DB가 있어야 도는 테스트(tests/db.rs, tests/ledger.rs, tests/deposit.rs, tests/withdrawal.rs, tests/invariants.rs)를 켠다. verify.sh full이 켠다
+# DB가 있어야 도는 테스트(tests/db.rs, tests/ledger.rs, tests/deposit.rs, tests/withdrawal.rs, tests/recon.rs, tests/invariants.rs)를 켠다. verify.sh full이 켠다
 db = []
+# 로컬 anvil 노드로 실제 체인 reorg·서명·대사를 검증하는 테스트(tests/anvil.rs)를 켠다
+anvil = ["vault-sim/anvil"]
 
 [dependencies]
 alloy-consensus.workspace = true
@@ -43,3 +45,13 @@ required-features = ["db"]
 name = "withdrawal"
 path = "tests/withdrawal.rs"
 required-features = ["db"]
+
+[[test]]
+name = "recon"
+path = "tests/recon.rs"
+required-features = ["db"]
+
+[[test]]
+name = "anvil"
+path = "tests/anvil.rs"
+required-features = ["db", "anvil"]

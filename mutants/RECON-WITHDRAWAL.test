@@ -1,0 +1,2 @@
+# Confirmed 출금의 서명 tx·영수증 검증을 건너뛰는 변형(RECON-WITHDRAWAL). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test recon -- detects_deposit_and_withdrawal_mismatches --exact

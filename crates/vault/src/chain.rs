@@ -141,6 +141,12 @@ pub trait ChainClient {
         address: Address,
         block: BlockNumber,
     ) -> impl Future<Output = RpcOutcome<u64>> + Send;
+    /// 그 블록 시점의 주소 코인 잔액(wei).
+    fn balance_at(
+        &self,
+        address: Address,
+        block: BlockNumber,
+    ) -> impl Future<Output = RpcOutcome<u128>> + Send;
 }
 
 impl Hash32 {

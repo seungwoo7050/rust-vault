@@ -1,0 +1,2 @@
+# RECON-DEPOSIT: canonical 블록의 온체인 입금 대조를 건너뛰면 deposits 행 누락 단언이 깨져야 한다
+온체인 입금의 deposits 행 누락 불일치를 찾아야 한다

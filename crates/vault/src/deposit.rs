@@ -10,12 +10,13 @@
 //! 상태(커서, 헤더, 입금, 정지 여부)는 모두 DB에 있다. `Scanner`를 새로 만들면 DB에서 이어 간다(재시작).
 //! 메모리에 두는 것은 "커밋 결과를 모르는 블록" 하나뿐이고, 그것도 같은 프로세스 안의 재시도용이다.
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 
 use crate::chain::{
-    Address, Block, BlockHeader, BlockNumber, ChainClient, Hash32, Notification, RpcError,
+    Address, Block, BlockHeader, BlockNumber, ChainClient, ChainTx, Hash32, Notification, RpcError,
     RpcOutcome,
 };
 use crate::ledger::{self, AccountKey, Amount, Line, NewEntry, PostError};
@@ -33,6 +34,8 @@ pub struct ScanConfig {
     /// `run_until_idle`이 일시 오류(`ScanError::Transient`) 뒤 같은 step을 다시 하는 최대 횟수(연속).
     /// 넘으면 그 오류를 돌려준다
     pub transient_retries: u32,
+    /// 운영 자금 입금을 스캔할 출금 핫월렛 주소. `Some`이면 이 주소로 들어온 확정된 전송을 `cap:fund`로 기록한다
+    pub hot_wallet: Option<Address>,
 }
 
 /// 마지막으로 처리한 canonical 블록.
@@ -195,6 +198,8 @@ pub struct Scanner<C, F = NoFaults> {
     faults: F,
     /// 커밋 결과를 모르는 블록. 다음 `step`이 체인에 다시 묻지 않고 이 블록을 그대로 다시 처리한다
     retry: Option<Block>,
+    /// 운영 자금 입금 스캔(`hot_wallet: Some`)을 위해 본 블록의 tx 캐시
+    seen: HashMap<Hash32, Vec<ChainTx>>,
 }
 
 impl<C: ChainClient> Scanner<C, NoFaults> {
@@ -221,13 +226,14 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
                 "confirmations must be at least 1".into(),
             ));
         }
-        init_cursor(&pool, &config.start).await?;
+        init_cursor(&pool, &config.start, config.hot_wallet).await?;
         Ok(Self {
             pool,
             chain,
             config,
             faults,
             retry: None,
+            seen: HashMap::new(),
         })
     }
 
@@ -318,6 +324,7 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
             revive_header(&mut tx, block.header.hash).await?;
         }
         record_deposits(&mut tx, self.config.chain_id, &block).await?;
+        self.confirm_operator_funding(&mut tx, &block).await?;
         confirm_ready(
             &mut tx,
             self.config.chain_id,
@@ -346,7 +353,10 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
     async fn rewind(&mut self, cursor: Cursor) -> Result<Step, ScanError> {
         // 조상 찾기는 읽기만 한다. 조회가 하나라도 결과를 모르면 아무것도 쓰지 않고 이 step을 끝낸다
         let ancestor = match self.find_common_ancestor(&cursor).await? {
-            Ancestor::Found(a) => a,
+            Ancestor::Found(a) => {
+                self.check_operator_funding_reorg(a.number).await?;
+                a
+            }
             Ancestor::Wait => return Ok(Step::Idle),
             Ancestor::NotFound => {
                 let reason = format!(
@@ -426,6 +436,155 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
             .map_err(|e| commit_error(e).0)?;
         Err(ScanError::Halted(reason))
     }
+
+    /// 설정된 출금 핫월렛 주소로 들어온 코인 전송이 확정 수 N에 이르면 `cap:fund` 분개를 기록한다.
+    async fn confirm_operator_funding(
+        &mut self,
+        tx: &mut Transaction<'_, Postgres>,
+        block: &Block,
+    ) -> Result<(), ScanError> {
+        let Some(hw) = self.config.hot_wallet else {
+            return Ok(());
+        };
+        self.seen.insert(block.header.hash, block.txs.clone());
+        let Some(deepest) = (block.header.number.0 + 1).checked_sub(self.config.confirmations)
+        else {
+            return Ok(());
+        };
+        let rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT number, hash FROM block_headers
+              WHERE NOT orphaned AND number <= $1
+              ORDER BY number",
+        )
+        .bind(db_number(BlockNumber(deepest))?)
+        .fetch_all(&mut **tx)
+        .await?;
+
+        for (num, hash_str) in rows {
+            let b_hash = decode_hash(&hash_str).map_err(ScanError::Db)?;
+            let b_num = BlockNumber(num as u64);
+            let txs = if b_hash == block.header.hash {
+                block.txs.clone()
+            } else if let Some(cached) = self.seen.get(&b_hash) {
+                cached.clone()
+            } else {
+                match rpc(self.chain.block_by_number(b_num).await)? {
+                    Some(b) if b.header.hash == b_hash => {
+                        self.seen.insert(b_hash, b.txs.clone());
+                        b.txs
+                    }
+                    _ => continue,
+                }
+            };
+            for t in txs {
+                if !t.success || t.value == 0 || t.to != hw {
+                    continue;
+                }
+                if owner_of(tx, t.to).await?.is_some() {
+                    continue;
+                }
+                let amount = Amount::new(t.value).ok_or_else(|| {
+                    ScanError::BadBlock(format!("tx {} value {} too large", t.hash, t.value))
+                })?;
+                ledger::open_account(&mut *tx, &AccountKey::hot_wallet(hw)).await?;
+                ledger::open_account(&mut *tx, &AccountKey::operator_capital()).await?;
+                ledger::post(tx, fund_entry(self.config.chain_id, hw, t.hash, amount)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 이미 `cap:fund`로 확정된 운영 자금 입금 블록이 깊은 reorg로 빠졌으면 사고 기록을 남기고 정지한다.
+    async fn check_operator_funding_reorg(
+        &mut self,
+        ancestor: BlockNumber,
+    ) -> Result<(), ScanError> {
+        let Some(hw) = self.config.hot_wallet else {
+            return Ok(());
+        };
+        let prefix = format!("cap:fund:{}:", self.config.chain_id);
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT e.idempotency_key, l.amount::text
+               FROM journal_entries e
+               JOIN journal_lines l ON l.entry_id = e.id
+              WHERE e.kind = 'cap:fund' AND l.account_key = $1
+              ORDER BY e.id",
+        )
+        .bind(AccountKey::hot_wallet(hw).as_str())
+        .fetch_all(&self.pool)
+        .await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let mut canonical_txs = HashSet::new();
+        for n in 0..=ancestor.0 {
+            if let Some(b) = rpc(self.chain.block_by_number(BlockNumber(n)).await)? {
+                for t in &b.txs {
+                    if t.success && t.value > 0 && t.to == hw {
+                        canonical_txs.insert(t.hash);
+                    }
+                }
+            }
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let fallback_block: Option<String> = sqlx::query_scalar(
+            "SELECT hash FROM block_headers WHERE number > $1 AND NOT orphaned ORDER BY number LIMIT 1",
+        )
+        .bind(db_number(ancestor)?)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let fallback_hash = fallback_block
+            .as_deref()
+            .and_then(Hash32::parse)
+            .unwrap_or(Hash32::ZERO);
+
+        let mut orphaned_funds = Vec::new();
+        for (key, amt_str) in rows {
+            let Some(tx_str) = key.strip_prefix(&prefix) else {
+                continue;
+            };
+            let Some(tx_hash) = Hash32::parse(tx_str) else {
+                continue;
+            };
+            if canonical_txs.contains(&tx_hash) {
+                continue;
+            }
+            let block_hash = self
+                .seen
+                .iter()
+                .find_map(|(&bh, txs)| txs.iter().any(|t| t.hash == tx_hash).then_some(bh))
+                .unwrap_or(fallback_hash);
+            let amount = amt_str
+                .parse::<u128>()
+                .ok()
+                .and_then(Amount::new)
+                .ok_or_else(|| {
+                    ScanError::Db(sqlx::Error::Decode("cap:fund amount".to_owned().into()))
+                })?;
+            orphaned_funds.push(Deposit {
+                tx_hash,
+                block_hash,
+                address: hw,
+                user_id: 0,
+                amount,
+            });
+        }
+        if orphaned_funds.is_empty() {
+            return Ok(());
+        }
+
+        let mut confirmed = deposits_above(&mut tx, ancestor, "confirmed").await?;
+        confirmed.extend(orphaned_funds);
+        let withdrawals = withdrawal::concluded_above(&mut tx, ancestor).await?;
+        let reason = record_violations(&mut tx, &confirmed, &withdrawals).await?;
+        set_halted(&mut tx, &reason).await?;
+        store::commit(tx, &self.faults, Site::Rewind)
+            .await
+            .map_err(|e| commit_error(e).0)?;
+        Err(ScanError::Halted(reason))
+    }
 }
 
 enum Ancestor {
@@ -500,11 +659,31 @@ fn confirm_entry(chain_id: u64, d: &Deposit) -> NewEntry {
     }
 }
 
+/// 운영 자금 입금: 차 `hot_wallet:{출금 주소}` / 대 `operator_capital`. 확정 수 N에 이른 뒤 한 번 기록된다.
+fn fund_entry(chain_id: u64, hot_wallet: Address, tx_hash: Hash32, amount: Amount) -> NewEntry {
+    NewEntry {
+        idempotency_key: format!("cap:fund:{chain_id}:{tx_hash}"),
+        kind: "cap:fund".into(),
+        lines: vec![
+            Line::debit(AccountKey::hot_wallet(hot_wallet), amount),
+            Line::credit(AccountKey::operator_capital(), amount),
+        ],
+    }
+}
+
 // ---- SQL -----------------------------------------------------------------------------------
 
 /// 시작 헤더를 처음 한 번만 저장하고 커서로 삼는다. 이미 커서가 있으면 그대로 둔다.
-async fn init_cursor(pool: &PgPool, start: &BlockHeader) -> Result<(), sqlx::Error> {
+async fn init_cursor(
+    pool: &PgPool,
+    start: &BlockHeader,
+    hot_wallet: Option<Address>,
+) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
+    if let Some(hw) = hot_wallet {
+        ledger::open_account(&mut tx, &AccountKey::hot_wallet(hw)).await?;
+        ledger::open_account(&mut tx, &AccountKey::operator_capital()).await?;
+    }
     sqlx::query(
         "INSERT INTO block_headers (hash, number, parent_hash) VALUES ($1, $2, $3)
          ON CONFLICT (hash) DO NOTHING",

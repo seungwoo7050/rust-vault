@@ -63,14 +63,18 @@ pub struct WEnv {
 impl WEnv {
     /// 새 DB와 체인. 출금 주소에 운영 자금을 넣고 스캔해 둔다.
     pub async fn new() -> Self {
-        let w = Self {
-            env: Env::new().await,
-            clock: FakeClock::new(),
-            next_tx: AtomicU64::new(1_000_000),
-        };
+        let w = Self::from_env(Env::new().await);
         w.fund_operator(CAPITAL).await;
         w.scan().await;
         w
+    }
+
+    pub fn from_env(env: Env) -> Self {
+        Self {
+            env,
+            clock: FakeClock::new(),
+            next_tx: AtomicU64::new(1_000_000),
+        }
     }
 
     pub fn chain(&self) -> &FakeChain {
