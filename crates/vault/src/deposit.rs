@@ -235,13 +235,20 @@ impl<C: ChainClient, F: Faults> Scanner<C, F> {
     /// 블록 하나를 한 트랜잭션으로 처리한다(ADR-002 결정 3).
     async fn apply_block(&mut self, block: Block) -> Result<Step, ScanError> {
         let mut tx = self.pool.begin().await?;
-        if !save_header(&mut tx, &block.header).await? {
-            drop(tx);
-            let reason = format!(
-                "orphaned block {} {} is canonical again",
-                block.header.number, block.header.hash
-            );
-            return self.halt(reason).await;
+        if save_header(&mut tx, &block.header).await? == Saved::WasOrphaned {
+            // 한 번 고아로 표시한 블록이 다시 canonical이 됐다(A → B → A, ADR-002 결정 10).
+            // 그 블록의 잠정 입금은 이미 역분개됐고 같은 키로는 다시 기록할 수 없다.
+            // 넘어가면 canonical 입금을 조용히 잃으므로, 그런 입금이 있을 때만 멈춘다
+            if has_reverted_deposits(&mut tx, block.header.hash).await? {
+                drop(tx);
+                let reason = format!(
+                    "orphaned block {} {} with reverted deposits is canonical again",
+                    block.header.number, block.header.hash
+                );
+                return self.halt(reason).await;
+            }
+            // 입금이 없던 블록은 잃을 것이 없다. 고아 표시를 풀고 평소처럼 처리한다
+            revive_header(&mut tx, block.header.hash).await?;
         }
         record_deposits(&mut tx, self.config.chain_id, &block).await?;
         confirm_ready(
@@ -446,12 +453,20 @@ async fn load_cursor(pool: &PgPool) -> Result<Cursor, ScanError> {
         .ok_or_else(|| ScanError::Db(sqlx::Error::RowNotFound))
 }
 
+/// 헤더 저장 결과.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Saved {
+    /// 새로 저장했거나 이미 canonical 헤더로 있다(재처리)
+    Live,
+    /// 같은 해시가 고아로 표시돼 있다: 한 번 빠진 블록이 다시 canonical이 됐다
+    WasOrphaned,
+}
+
 /// 헤더를 저장한다. 같은 해시가 이미 있으면 그대로 둔다(재처리).
-/// 그 헤더가 고아로 표시돼 있으면 `false`: 한 번 빠진 블록이 다시 canonical이 됐다.
 async fn save_header(
     tx: &mut Transaction<'_, Postgres>,
     h: &BlockHeader,
-) -> Result<bool, sqlx::Error> {
+) -> Result<Saved, sqlx::Error> {
     sqlx::query(
         "INSERT INTO block_headers (hash, number, parent_hash) VALUES ($1, $2, $3)
          ON CONFLICT (hash) DO NOTHING",
@@ -465,7 +480,36 @@ async fn save_header(
         .bind(h.hash.to_string())
         .fetch_one(&mut **tx)
         .await?;
-    Ok(!orphaned)
+    Ok(if orphaned {
+        Saved::WasOrphaned
+    } else {
+        Saved::Live
+    })
+}
+
+/// 이 블록에 역분개된 입금이 있는가(잠정 키가 이미 쓰였는가).
+async fn has_reverted_deposits(
+    tx: &mut Transaction<'_, Postgres>,
+    block_hash: Hash32,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM deposits WHERE block_hash = $1 AND status = 'reverted')",
+    )
+    .bind(block_hash.to_string())
+    .fetch_one(&mut **tx)
+    .await
+}
+
+/// 고아 표시를 푼다. 커서 위의 canonical 헤더는 되감기가 모두 고아로 표시했으므로 번호가 겹치지 않는다.
+async fn revive_header(
+    tx: &mut Transaction<'_, Postgres>,
+    block_hash: Hash32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE block_headers SET orphaned = false WHERE hash = $1")
+        .bind(block_hash.to_string())
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }
 
 /// 우리 입금 주소로 온 성공 tx마다 `deposits` 행과 잠정 분개를 쓴다(블록 안 순서대로).

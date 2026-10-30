@@ -152,8 +152,9 @@ async fn zero_value_and_failed_txs_are_not_deposits() {
     env.db.drop_db().await;
 }
 
-/// (라) 한 번 고아가 된 블록이 다시 canonical이 되면 정지한다. 그 블록의 잠정 입금은 이미 역분개됐고
-/// 같은 멱등 키로는 다시 기록할 수 없어서, 넘어가면 canonical 입금을 조용히 잃는다(ADR-002 결정 10).
+/// (라) 한 번 고아가 된 블록이 역분개된 입금을 품고 다시 canonical이 되면 정지한다. 그 블록의 잠정 입금은
+/// 이미 역분개됐고 같은 멱등 키로는 다시 기록할 수 없어서, 넘어가면 canonical 입금을 조용히 잃는다
+/// (ADR-002 결정 10). 정지하는 step은 원장·커서·헤더를 하나도 바꾸지 않는다.
 #[tokio::test]
 async fn orphaned_block_coming_back_halts() {
     let env = Env::new().await;
@@ -166,11 +167,70 @@ async fn orphaned_block_coming_back_halts() {
     scan::extend(chain, g, 2);
     scanner.run_until_idle().await.unwrap();
     assert_eq!(env.entries("dep:revert:").await, 1);
-    // 다시 A: g → a1 → a2 → a3
+    // 다시 A: g → a1 → a2 → a3. 첫 step은 B를 genesis까지 되감는다
     scan::extend(chain, a1, 2);
-    let got = scanner.run_until_idle().await;
+    let rewound = scanner.step().await.unwrap();
+    assert!(
+        matches!(
+            rewound,
+            Step::Rewound {
+                to: BlockNumber(0),
+                ..
+            }
+        ),
+        "{rewound:?}"
+    );
+
+    let keys = env.keys().await;
+    let balances = env.balances().await;
+    let cursor = env.cursor().await;
+    let headers = env.headers().await;
+    // 다음 step이 고아였던 a1을 만나 정지한다
+    let got = scanner.step().await;
     assert!(matches!(got, Err(ScanError::Halted(_))), "{got:?}");
     assert!(env.halted().await.unwrap().contains("canonical again"));
+    assert_eq!(env.keys().await, keys, "분개가 바뀌었다");
+    assert_eq!(env.balances().await, balances, "잔액이 바뀌었다");
+    assert_eq!(env.cursor().await, cursor, "커서가 바뀌었다");
+    assert_eq!(env.headers().await, headers, "헤더가 바뀌었다");
+    assert_eq!(env.balance(&AccountKey::pending_deposit(1)).await, 0);
+    assert_eq!(env.trial_balance().await, 0);
+    env.db.drop_db().await;
+}
+
+/// (마) 입금이 없던 블록이 고아가 됐다가 다시 canonical이 되면(노드 사이를 오가는 1블록 flip-flop)
+/// 멈추지 않는다. 고아 표시를 풀고 평소처럼 처리하며, 그 뒤 입금도 확정된다.
+#[tokio::test]
+async fn orphaned_empty_block_coming_back_continues() {
+    let env = Env::new().await;
+    let chain = &env.chain;
+    let g = chain.genesis().hash;
+    // A: g → x1 스캔, B: g → y1 → y2로 바꿔 x1을 고아로
+    let x1 = chain.mine_canonical(g, vec![]);
+    let mut scanner = env.scanner().await;
+    scanner.run_until_idle().await.unwrap();
+    scan::extend(chain, g, 2);
+    scanner.run_until_idle().await.unwrap();
+    assert_eq!(env.headers().await.iter().filter(|h| h.3).count(), 1);
+    // 다시 A: g → x1 → x2(입금) → 빈 블록 N개
+    let x2 = chain.mine_canonical(x1, vec![transfer(1, scan::addr(1), 100)]);
+    scan::extend(chain, x2, scan::N as usize);
+    scanner
+        .run_until_idle()
+        .await
+        .expect("입금 없는 flip-flop에서는 멈추지 않아야 한다");
+
+    assert!(env.halted().await.is_none(), "정지했다");
+    assert_eq!(
+        env.cursor().await.hash,
+        chain.tip().hash,
+        "커서가 head가 아니다"
+    );
+    env.check_stored_chain().await.unwrap();
+    let x1_row = env.headers().await;
+    let x1_row = x1_row.iter().find(|h| h.1 == x1.to_string()).unwrap();
+    assert!(!x1_row.3, "x1의 고아 표시가 풀리지 않았다");
+    assert_eq!(env.balance(&AccountKey::user(1)).await, 100);
     assert_eq!(env.balance(&AccountKey::pending_deposit(1)).await, 0);
     assert_eq!(env.trial_balance().await, 0);
     env.db.drop_db().await;
