@@ -1,0 +1,2 @@
+# 잠정 입금 키를 tx 해시·블록 해시 대신 수신 순번으로 만드는 변형(T2.3). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i2_idempotency::duplicate_block_events_credit_once --exact

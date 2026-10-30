@@ -1,0 +1,2 @@
+# 고아였던 블록이 다시 canonical이 되면 입금 유무와 상관없이 정지하는 변형. 표 밖. DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test deposit -- orphaned_empty_block_coming_back_continues --exact

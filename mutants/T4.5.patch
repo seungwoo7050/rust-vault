@@ -1,0 +1,15 @@
+--- a/crates/vault/src/deposit.rs
++++ b/crates/vault/src/deposit.rs
+@@ -215,7 +215,11 @@
+     }
+ 
+     /// 새 head 알림. 내용은 쓰지 않고 스캔 신호로만 쓴다.
+-    pub async fn on_notification(&mut self, _n: Notification) -> Result<(), ScanError> {
++    pub async fn on_notification(&mut self, n: Notification) -> Result<(), ScanError> {
++        let Notification::NewHead(h) = n;
++        if let Some(block) = rpc(self.chain.block_by_number(h.number).await)? {
++            self.apply_block(block).await?;
++        }
+         // 알림은 몇 번이 어떤 순서로 오든 "스캔하라"는 뜻일 뿐이다(ADR-002 결정 2).
+         // 알림의 블록을 바로 처리하면 순서가 바뀐 알림이 커서를 건너뛰게 한다. 언제나 커서 다음을 끌어온다
+         self.run_until_idle().await

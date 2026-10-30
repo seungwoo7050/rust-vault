@@ -1,0 +1,21 @@
+--- a/crates/vault/src/deposit.rs
++++ b/crates/vault/src/deposit.rs
+@@ -291,7 +291,7 @@
+         };
+ 
+         let mut tx = self.pool.begin().await?;
+-        let confirmed = deposits_above(&mut tx, ancestor.number, "confirmed").await?;
++        let confirmed: Vec<Deposit> = vec![];
+         if !confirmed.is_empty() {
+             // 확정된 입금이 canonical에서 빠졌다: "N보다 깊은 reorg는 없다"는 정책 가정이 깨졌다.
+             // 확정된 입금은 되돌리지 않는다. 그 사이 출금됐을 수 있어 자동 회수는 음수나 엉뚱한 회수를 만든다.
+@@ -303,7 +303,8 @@
+         }
+ 
+         // 확정 전 입금만 걸렸다: 고아 표시 → 잠정 입금 역분개 → 커서를 공통 조상으로
+-        let pending = deposits_above(&mut tx, ancestor.number, "pending").await?;
++        let mut pending = deposits_above(&mut tx, ancestor.number, "pending").await?;
++        pending.extend(deposits_above(&mut tx, ancestor.number, "confirmed").await?);
+         orphan_above(&mut tx, ancestor.number).await?;
+         for d in &pending {
+             ledger::post(&mut tx, revert_entry(self.config.chain_id, d)).await?;

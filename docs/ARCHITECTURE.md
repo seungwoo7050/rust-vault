@@ -26,7 +26,7 @@
 | crate | 모듈 | 책임 | 브랜치 |
 | --- | --- | --- | --- |
 | `vault` | `ledger` | 분개 검증·기록, 멱등 키, 잔액 조회. 스스로 커밋하지 않고 받은 트랜잭션 안에서만 쓴다 | 02 |
-| | `store` | 연결 풀, 마이그레이션, 트랜잭션 경계, 장애 주입 지점을 끼울 수 있는 얇은 래퍼 | 02, 04 |
+| | `store` | 연결 풀, 마이그레이션, 트랜잭션 경계, 장애 주입 자리(`Faults` trait, 운영 기본값 `NoFaults`) | 02, 03, 04 |
 | | `chain` | `ChainClient` trait, `RpcOutcome { Ok, Definite, Indeterminate }`, 블록·영수증·tx 타입 | 03 |
 | | `deposit` | 스캐너: 커서, 블록 헤더 저장, reorg 감지·되감기, 잠정 입금·확정 | 03 |
 | | `withdrawal` | 출금 상태 기계, nonce 할당, 서명 tx 저장, 재전송·조회 루틴 | 05 |
@@ -47,8 +47,9 @@
 | `deposit_addresses` | 주소 → 사용자 | 읽기 전용(설정) |
 | `block_headers` | 번호, 해시, 부모 해시, 고아 여부 | 블록 처리·되감기 |
 | `scan_cursor` | 번호, 해시 | 블록 처리·되감기 |
-| `deposits` | tx 해시, 블록 해시, 사용자, 금액, 상태 | 블록 처리·되감기 |
-| `finality_violations` | 블록, tx, 금액, 시각 | 되감기 중 정책 위반 |
+| `deposits` | tx 해시, 블록 해시, 블록 안 위치, 주소, 사용자, 금액, 상태 | 블록 처리·되감기 |
+| `finality_violations` | 종류, 블록, tx, 금액, 시각 | 되감기 중 정책 위반 |
+| `scanner_state` | 정지 여부, 사유 | 되감기 중 정책 위반, 고아 블록 재등장 |
 | `withdrawals` | 요청 ID(유일), 사용자, 수취인, 금액, 상태 | 상태 전이마다 |
 | `signed_txs` | 요청 ID, nonce, raw tx, tx 해시 | `Held → Signed` |
 | `wallet_nonces` | 주소, 다음 nonce | `Held → Signed` |

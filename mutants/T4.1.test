@@ -1,0 +1,2 @@
+# reorg 감지에서 부모 해시 비교를 빼고 블록 번호만 보는 변형(T4.1). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i4_chain_consistency::reorg_before_confirmation_reverses_pending --exact

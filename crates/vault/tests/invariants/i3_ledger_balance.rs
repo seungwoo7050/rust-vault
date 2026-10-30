@@ -1,11 +1,15 @@
 //! I3 원장 정합성: 모든 회계 거래는 차변과 대변이 일치한다
 
 use proptest::collection::vec;
+use proptest::prelude::*;
 use proptest::test_runner::{TestCaseError, TestRunner};
-use vault::ledger::{self, NewEntry, Posted};
+use vault::chain::ChainTx;
+use vault::ledger::{self, AccountKey, NewEntry, Posted};
+use vault_sim::chain::transfer;
 use vault_sim::db::TestDb;
 
 use crate::model::{self, Expect, Model, Shape};
+use crate::scan::{self, Env};
 
 // T3.1 실패해야 할 변형: 분개 줄 기록 루프가 마지막 줄을 빠뜨림(커밋 트리거가 거부해 "모두 성공" 단언이 깨진다)
 #[test]
@@ -150,9 +154,166 @@ async fn db_rejects_unbalanced_entry() {
 
 // T3.3 실패해야 할 변형: 역분개가 잠정 입금 계정 줄만 쓰고 핫월렛 줄을 빠뜨림(거부되어 스캔이 멈춘다)
 #[test]
-#[ignore = "03-deposit-reorg"]
 fn trial_balance_zero_after_reorgs() {
-    unimplemented!(
-        "T3.3: 입금·reorg·재포함·확정이 섞인 임의 체인 이력. 단언: 스캔이 오류 없이 head까지 가고, 시산 0, 고아 블록의 잠정 입금 잔액 0, `hot_wallet:{{입금 주소}}` 잔액 = 가짜 체인 canonical 입금 합"
-    );
+    let rt = model::runtime();
+    let mut runner = TestRunner::new(model::config(16));
+    runner
+        .run(&vec(history_op(), 0..12), |ops| {
+            // 맨 앞은 언제나 [입금 블록, 스캔, 그 블록을 빼는 깊이 1 reorg, 스캔]. 역분개가 한 번은 일어난다
+            let mut seq = vec![
+                Op::Mine(vec![(0, 10)]),
+                Op::Scan,
+                Op::Reorg {
+                    depth: 1,
+                    extra: 1,
+                    deposits: vec![],
+                    reinclude: 0,
+                },
+                Op::Scan,
+            ];
+            seq.extend(ops);
+            rt.block_on(run_history(seq)).map_err(TestCaseError::fail)
+        })
+        .unwrap();
+}
+
+/// 체인 이력 한 걸음.
+#[derive(Debug, Clone)]
+enum Op {
+    /// tip 위에 블록 하나. (사용자 순번, 금액) 입금이 들어 있다
+    Mine(Vec<(usize, u128)>),
+    /// tip에서 `depth`(1..N) 아래 블록에서 갈라진 `depth + extra`개짜리 분기를 canonical로 삼는다.
+    /// 분기의 첫 블록에 새 입금과, canonical에서 빠진 tx 중 앞 `reinclude`개를 넣는다(재포함).
+    /// 분기가 예전보다 짧지 않아 tip 번호가 줄지 않는다. 그래서 확정된 입금은 빠지지 않는다(깊이 < N)
+    Reorg {
+        depth: u64,
+        extra: u64,
+        deposits: Vec<(usize, u128)>,
+        reinclude: usize,
+    },
+    Scan,
+}
+
+fn history_op() -> impl Strategy<Value = Op> {
+    let deposits = || vec((0..scan::USERS.len(), 1u128..=1_000), 0..3);
+    prop_oneof![
+        3 => deposits().prop_map(Op::Mine),
+        2 => (1..scan::N, 0u64..=2, deposits(), 0usize..3).prop_map(
+            |(depth, extra, deposits, reinclude)| Op::Reorg { depth, extra, deposits, reinclude }
+        ),
+        2 => Just(Op::Scan),
+    ]
+}
+
+async fn run_history(seq: Vec<Op>) -> Result<(), String> {
+    let env = Env::new().await;
+    let result = history(&env, seq).await;
+    env.db.drop_db().await;
+    result
+}
+
+async fn history(env: &Env, seq: Vec<Op>) -> Result<(), String> {
+    let chain = &env.chain;
+    let mut scanner = env.scanner().await;
+    let mut all_txs: Vec<ChainTx> = vec![];
+    let mut next_id = 0u64;
+    let mut fresh = |deps: &[(usize, u128)], all: &mut Vec<ChainTx>| -> Vec<ChainTx> {
+        deps.iter()
+            .map(|(u, v)| {
+                next_id += 1;
+                let t = transfer(next_id, scan::addr(scan::USERS[*u]), *v);
+                all.push(t);
+                t
+            })
+            .collect()
+    };
+
+    for (i, op) in seq.iter().enumerate() {
+        match op {
+            Op::Mine(deps) => {
+                let txs = fresh(deps, &mut all_txs);
+                chain.mine_canonical(chain.tip().hash, txs);
+            }
+            Op::Reorg {
+                depth,
+                extra,
+                deposits,
+                reinclude,
+            } => {
+                let tip = chain.tip().number.0;
+                let depth = (*depth).min(tip);
+                let canonical = chain.canonical_blocks();
+                let fork = canonical[(tip - depth) as usize].header.hash;
+                // 갈라진 곳까지의 canonical에 없는 tx는 모두 "빠진 tx"다(고아 블록에 있었거나 재포함됐다 빠진 것)
+                let kept: Vec<_> = canonical[..=(tip - depth) as usize]
+                    .iter()
+                    .flat_map(|b| b.txs.iter().map(|t| t.hash))
+                    .collect();
+                let mut first = fresh(deposits, &mut all_txs);
+                first.extend(
+                    all_txs
+                        .iter()
+                        .filter(|t| !kept.contains(&t.hash))
+                        .filter(|t| !first.iter().any(|f| f.hash == t.hash))
+                        .take(*reinclude)
+                        .copied()
+                        .collect::<Vec<_>>(),
+                );
+                let mut h = chain.mine(fork, first);
+                for _ in 1..(depth + extra).max(1) {
+                    h = chain.mine(h, vec![]);
+                }
+                chain.set_canonical(h);
+            }
+            Op::Scan => scanner
+                .run_until_idle()
+                .await
+                .map_err(|e| format!("{i}번째 스캔 오류: {e}"))?,
+        }
+    }
+    // 끝에 빈 블록 N개를 더하고 head까지 스캔한다
+    scan::extend(chain, chain.tip().hash, scan::N as usize);
+    scanner
+        .run_until_idle()
+        .await
+        .map_err(|e| format!("마지막 스캔 오류: {e}"))?;
+
+    if env.cursor().await.hash != chain.tip().hash {
+        return Err("커서가 head에 이르지 못했다".into());
+    }
+    let trial = env.trial_balance().await;
+    if trial != 0 {
+        return Err(format!("시산 {trial}"));
+    }
+    // 고아 블록의 잠정 입금(잠정 입금 분개 + 역분개의 pending_deposit 줄 합)은 0이어야 한다
+    let orphan_pending: Vec<(String, String)> = sqlx::query_as(
+        "SELECT b.hash, coalesce(sum(l.amount), 0)::text
+           FROM block_headers b
+           JOIN deposits d ON d.block_hash = b.hash
+           JOIN journal_entries e ON e.idempotency_key IN (
+                'dep:pending:' || $1 || ':' || d.tx_hash || ':' || b.hash,
+                'dep:revert:' || $1 || ':' || d.tx_hash || ':' || b.hash)
+           JOIN journal_lines l ON l.entry_id = e.id AND l.account_key LIKE 'pending_deposit:%'
+          WHERE b.orphaned
+          GROUP BY b.hash",
+    )
+    .bind(scan::CHAIN_ID.to_string())
+    .fetch_all(&mut *env.conn().await)
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Some((h, sum)) = orphan_pending.iter().find(|(_, s)| s != "0") {
+        return Err(format!("고아 블록 {h}의 잠정 입금 잔액 {sum}"));
+    }
+    let canonical = chain.canonical_blocks();
+    for u in scan::USERS {
+        let want = scan::deposits_to(&canonical, scan::addr(u));
+        let hot = env.balance(&AccountKey::hot_wallet(scan::addr(u))).await;
+        if hot != want {
+            return Err(format!(
+                "hot_wallet:{} 잔액 {hot}, canonical 입금 합 {want}",
+                scan::addr(u)
+            ));
+        }
+    }
+    Ok(())
 }

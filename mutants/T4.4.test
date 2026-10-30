@@ -1,0 +1,2 @@
+# 확정 수를 받은 블록 개수(고아 포함)로 세는 변형(T4.4). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i4_chain_consistency::confirmation_counts_canonical_depth --exact

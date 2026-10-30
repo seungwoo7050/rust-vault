@@ -18,7 +18,7 @@ async fn connect_and_migrate_fresh_database() {
             .fetch_all(pool)
             .await
             .expect("schema_version 조회");
-    assert_eq!(versions, vec![1, 2]);
+    assert_eq!(versions, vec![1, 2, 3]);
 
     let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations WHERE success")
         .fetch_one(pool)

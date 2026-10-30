@@ -1,0 +1,2 @@
+# 알림으로 받은 블록을 부모 해시 검사 없이 바로 처리하는 변형(T4.5, 밀어넣기). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i4_chain_consistency::event_order_does_not_change_final_ledger --exact

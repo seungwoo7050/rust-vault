@@ -3,10 +3,14 @@
 use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::test_runner::{TestCaseError, TestRunner};
+use vault::chain::Notification;
+use vault::deposit::{AFTER_BLOCK_COMMIT, ScanError};
 use vault::ledger::{self, AccountKey, EntryId, NewEntry, PostError, Posted};
+use vault_sim::chain::transfer;
 use vault_sim::db::TestDb;
 
 use crate::model::{self, Expect, Model, Shape};
+use crate::scan::{self, Env};
 
 // T2.1 실패해야 할 변형: 멱등 키 유일 제약과 기존 키 조회 제거
 #[test]
@@ -188,12 +192,95 @@ async fn balances(conn: &mut sqlx::PgConnection) -> Vec<i128> {
 }
 
 // T2.3 실패해야 할 변형: 입금 키를 tx 해시 대신 수신 순번으로 만듦((나)의 재처리가 원장까지 닿아 두 번 기록된다)
-#[test]
-#[ignore = "03-deposit-reorg"]
-fn duplicate_block_events_credit_once() {
-    unimplemented!(
-        "T2.3: (가) 같은 블록을 2~3번 전달 (나) 블록 커밋 직후 \"결과 모름\" 오류를 주입해 같은 프로세스가 그 블록을 다시 처리 (다) 재시작 후 커서 직전 블록 재전달. 단언: 입금마다 `pending_deposit:u`·`user:u`에 한 번씩만 반영"
+#[tokio::test]
+async fn duplicate_block_events_credit_once() {
+    let env = Env::new().await;
+    let pending = |u: i64| AccountKey::pending_deposit(u);
+    let user = |u: i64| AccountKey::user(u);
+    let mut scanner = env.scanner().await;
+
+    // 블록 1: 사용자 1에게 100. 블록 2: 사용자 1에게 50, 사용자 2에게 70. 그 위로 빈 블록 N개(모두 확정)
+    let g = env.chain.genesis().hash;
+    let b1 = env.chain.mine(g, vec![transfer(1, scan::addr(1), 100)]);
+    let b2 = env.chain.mine(
+        b1,
+        vec![
+            transfer(2, scan::addr(1), 50),
+            transfer(3, scan::addr(2), 70),
+        ],
     );
+    let mut tip = b2;
+    let mut blocks = vec![b1, b2];
+    for _ in 0..scan::N {
+        tip = env.chain.mine(tip, vec![]);
+        blocks.push(tip);
+    }
+    // 블록마다 기대하는 (pending:1, pending:2, user:1, user:2). 블록 h에서 h − N + 1 이하 블록의 입금이 확정된다
+    let expect = [
+        (100, 0, 0, 0),
+        (150, 70, 0, 0),
+        (50, 70, 100, 0),
+        (0, 0, 150, 70),
+        (0, 0, 150, 70),
+    ];
+
+    for (i, hash) in blocks.iter().enumerate() {
+        env.chain.set_canonical(*hash);
+        let notes = env.chain.notifications();
+        // (나) 이 블록의 커밋 직후 "결과 모름"을 한 번 주입한다. 커밋은 실제로 됐다
+        env.faults.fail_after_commit(AFTER_BLOCK_COMMIT, 1);
+        let first = scanner.on_notification(notes[0].clone()).await;
+        assert!(
+            matches!(first, Err(ScanError::CommitUnknown(_))),
+            "블록 {}: 주입한 커밋 결과 모름이 나와야 한다, 받은 것 {first:?}",
+            i + 1
+        );
+        // (가) 같은 블록 알림을 2~3번 더 전달한다. 첫 전달이 커밋 결과를 모르는 블록을 다시 처리한다
+        for _ in 0..(2 + i % 2) {
+            scanner.on_notification(notes[0].clone()).await.unwrap();
+        }
+        assert_eq!(env.cursor().await.hash, *hash, "블록 {}: 커서", i + 1);
+        let (p1, p2, u1, u2) = expect[i];
+        let got = (
+            env.balance(&pending(1)).await,
+            env.balance(&pending(2)).await,
+            env.balance(&user(1)).await,
+            env.balance(&user(2)).await,
+        );
+        assert_eq!(
+            got,
+            (p1, p2, u1, u2),
+            "블록 {}: (pending:1, pending:2, user:1, user:2)",
+            i + 1
+        );
+
+        // (다) 재시작 후 커서 직전 블록의 알림을 다시 전달한다
+        if i >= 1 {
+            scanner = env.scanner().await;
+            let prev = env.chain.header(blocks[i - 1]);
+            scanner
+                .on_notification(Notification::NewHead(prev))
+                .await
+                .unwrap();
+            let again = (
+                env.balance(&pending(1)).await,
+                env.balance(&pending(2)).await,
+                env.balance(&user(1)).await,
+                env.balance(&user(2)).await,
+            );
+            assert_eq!(
+                again,
+                got,
+                "블록 {}: 재시작 뒤 재전달이 원장을 바꿨다",
+                i + 1
+            );
+        }
+    }
+
+    assert_eq!(env.entries("dep:pending:").await, 3, "잠정 입금 분개 수");
+    assert_eq!(env.entries("dep:confirm:").await, 3, "확정 분개 수");
+    assert_eq!(env.entries("dep:revert:").await, 0, "역분개 수");
+    env.db.drop_db().await;
 }
 
 // T2.4 실패해야 할 변형: `withdrawals.request_id` 유일 제약과 기존 요청 조회를 제거(홀드 키는 그대로 두어도 두 번째 출금 행이 따로 서명·지급된다)

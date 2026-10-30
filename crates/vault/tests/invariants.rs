@@ -5,6 +5,8 @@
 
 #[path = "support/model.rs"]
 mod model;
+#[path = "support/scan.rs"]
+mod scan;
 
 #[path = "invariants/i1_asset_safety.rs"]
 mod i1_asset_safety;

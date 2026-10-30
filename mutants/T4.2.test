@@ -1,0 +1,2 @@
+# 확정된 입금도 역분개하는 변형(T4.2). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i4_chain_consistency::reorg_beyond_confirmation_keeps_ledger_and_halts --exact

@@ -3,10 +3,12 @@
 use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::test_runner::{TestCaseError, TestRunner};
-use vault::ledger::{self, AccountKey, Line, NewEntry, Side};
+use vault::ledger::{self, AccountKey, Line, NewEntry, PostError, Posted, Side};
+use vault_sim::chain::transfer;
 use vault_sim::db::TestDb;
 
 use crate::model::{self, Model, Shape};
+use crate::scan::{self, Env};
 
 // T1.1 실패해야 할 변형: 분개 기록에서 savepoint를 없앰(없는 계정의 FK 위반이 트랜잭션 전체를 중단시키고, 그 트랜잭션의 커밋은 롤백으로 끝나 정상 분개까지 사라진다)
 #[test]
@@ -130,12 +132,64 @@ async fn run_mixed(seq: Vec<Op>) -> Result<(), String> {
 }
 
 // T1.2 실패해야 할 변형: 잠정 입금을 사용자 계정에 바로 대변 기록
-#[test]
-#[ignore = "03-deposit-reorg"]
-fn pending_deposit_not_spendable() {
-    unimplemented!(
-        "T1.2: 확정 수 N−1인 입금 직후 같은 금액의 출금 홀드 요청. 단언: 요청 `Rejected`, `user:u` = 0, 확정 뒤 같은 금액 요청은 `Held`"
+#[tokio::test]
+async fn pending_deposit_not_spendable() {
+    let env = Env::new().await;
+    let user = AccountKey::user(1);
+    let mut conn = env.conn().await;
+    ledger::open_account(&mut conn, &AccountKey::withdrawal_pending(1))
+        .await
+        .unwrap();
+
+    // 입금 블록 1 위로 1개 더: 확정 수 2 = N − 1
+    let g = env.chain.genesis().hash;
+    let b1 = env
+        .chain
+        .mine_canonical(g, vec![transfer(1, scan::addr(1), 100)]);
+    scan::extend(&env.chain, b1, (scan::N - 2) as usize);
+    let mut scanner = env.scanner().await;
+    scanner.run_until_idle().await.unwrap();
+    assert_eq!(env.cursor().await.number.0, scan::N - 1);
+
+    // 출금 모듈은 05에서 생긴다. 여기서는 ADR-001의 홀드 분개를 원장에 직접 기록한다
+    let mut tx = env.db.pool.begin().await.unwrap();
+    let early = ledger::post(&mut tx, hold("wd:hold:t1.2-early", 100)).await;
+    tx.commit().await.unwrap();
+    assert!(
+        matches!(&early, Err(PostError::InsufficientFunds(k)) if *k == user),
+        "확정 전 홀드는 InsufficientFunds(user:1)여야 한다, 받은 것 {early:?}"
     );
+    assert_eq!(env.balance(&user).await, 0, "확정 전 user:1은 0이어야 한다");
+    assert_eq!(env.balance(&AccountKey::pending_deposit(1)).await, 100);
+
+    // 블록 하나 더: 확정 수 N. 같은 금액 홀드가 기록된다
+    scan::extend(&env.chain, env.chain.tip().hash, 1);
+    scanner.run_until_idle().await.unwrap();
+    assert_eq!(env.balance(&user).await, 100);
+    let mut tx = env.db.pool.begin().await.unwrap();
+    let late = ledger::post(&mut tx, hold("wd:hold:t1.2-late", 100)).await;
+    tx.commit().await.unwrap();
+    assert!(
+        matches!(late, Ok(Posted::New(_))),
+        "확정 뒤 홀드는 기록되어야 한다, 받은 것 {late:?}"
+    );
+    assert_eq!(env.balance(&user).await, 0);
+    assert_eq!(env.balance(&AccountKey::withdrawal_pending(1)).await, 100);
+
+    drop(conn);
+    env.db.drop_db().await;
+}
+
+/// 출금 홀드 분개(ADR-001): 차 `user:1` / 대 `withdrawal_pending:1`.
+fn hold(key: &str, amount: u128) -> NewEntry {
+    model::entry(
+        key,
+        "wd:hold",
+        vec![
+            Line::debit(AccountKey::user(1), model::amt(amount)),
+            Line::credit(AccountKey::withdrawal_pending(1), model::amt(amount)),
+        ],
+    )
 }
 
 // T1.3 실패해야 할 변형: 홀드 분개의 사용자 잔액 음수 검사 제거

@@ -1,0 +1,2 @@
+# 고아였던 블록이 다시 canonical이 되면 역분개된 입금이 있어도 고아 표시를 풀고 진행하는 변형. 표 밖. DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test deposit -- orphaned_block_coming_back_halts --exact
