@@ -1,0 +1,13 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -11,10 +11,6 @@
+     if amount == 0 {
+         return Err(Rejected::ZeroAmount);
+     }
+-    // 첫 겹: 잔액보다 큰 출금을 거부한다
+-    if amount > balance {
+-        return Err(Rejected::Overdraft);
+-    }
+     // 둘째 겹: 뺄셈도 음수가 되면 거부한다
+     balance.checked_sub(amount).ok_or(Rejected::Overdraft)
+ }
