@@ -259,3 +259,88 @@ async fn open_account_idempotent_and_rejections_named() {
     drop(conn);
     db.drop_db().await;
 }
+
+/// 잔액 100인 사용자에게 60짜리 출금 홀드 두 건이 겹치면 하나만 받아들여진다.
+/// 첫 트랜잭션이 기록을 마치고 커밋 전에 멈춘 상태에서 둘째가 post를 시작한다. 계정 잠금이 있으면
+/// 둘째는 잠금에서 기다리고(pg_stat_activity로 확인), 첫째 커밋 뒤 그 줄까지 보고 거부된다.
+/// 잠금이 없으면 둘째는 기다리지 않고 첫째의 커밋 전 상태(잔액 100)로 판정해 끝나 버린다.
+/// 첫째의 커밋은 "둘째가 잠금에서 기다림" 또는 "둘째가 끝남" 중 하나를 확인한 뒤에만 하므로 타이밍에 기대지 않는다.
+#[tokio::test]
+async fn concurrent_holds_cannot_overspend() {
+    let db = TestDb::create().await;
+    let mut conn = db.pool.acquire().await.unwrap();
+    model::open_all(&mut conn).await;
+    let user = AccountKey::user(1);
+    let mut tx = db.pool.begin().await.unwrap();
+    ledger::post(
+        &mut tx,
+        model::entry(
+            "dep:confirm:1:0xt",
+            "dep:confirm",
+            vec![
+                Line::debit(AccountKey::hot_wallet("0xa"), model::amt(100)),
+                Line::credit(user.clone(), model::amt(100)),
+            ],
+        ),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let hold = |req: &str| {
+        model::entry(
+            format!("wd:hold:{req}"),
+            "wd:hold",
+            vec![
+                Line::debit(AccountKey::user(1), model::amt(60)),
+                Line::credit(AccountKey::withdrawal_pending(1), model::amt(60)),
+            ],
+        )
+    };
+
+    // 첫째: 기록까지 마치고 커밋하지 않은 채 둔다(계정 행 잠금을 쥐고 있다)
+    let mut first = db.pool.begin().await.unwrap();
+    let a = ledger::post(&mut first, hold("r1")).await.expect("첫 홀드");
+
+    // 둘째: 다른 연결에서 post를 시작한다
+    let pool = db.pool.clone();
+    let second = tokio::spawn(async move {
+        let mut tx = pool.begin().await.unwrap();
+        let r = ledger::post(&mut tx, hold("r2")).await;
+        tx.commit().await.unwrap();
+        r
+    });
+
+    // 둘째가 잠금에서 기다리거나 끝날 때까지 본다(잠금이 있으면 앞, 없으면 뒤)
+    let mut waited_on_lock = false;
+    for _ in 0..2_000 {
+        if second.is_finished() {
+            break;
+        }
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+              WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            waited_on_lock = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    first.commit().await.unwrap();
+    let b = second.await.unwrap();
+
+    assert!(matches!(a, Posted::New(_)), "{a:?}");
+    assert!(
+        matches!(&b, Err(PostError::InsufficientFunds(k)) if *k == user),
+        "둘째 홀드는 InsufficientFunds여야 한다(잠금 대기 {waited_on_lock}), 받은 것 {b:?}"
+    );
+    let bal = ledger::balance(&mut conn, &user).await.unwrap();
+    assert!(bal >= 0, "user:1 잔액 {bal}");
+    assert_eq!(bal, 40);
+    drop(conn);
+    db.drop_db().await;
+}

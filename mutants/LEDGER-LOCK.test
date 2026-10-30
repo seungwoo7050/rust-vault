@@ -1,0 +1,2 @@
+# 잔액 검사 전 계정 행 잠금(FOR NO KEY UPDATE)을 없앤 변형. 표 밖(평가가 찾은 것). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test ledger -- concurrent_holds_cannot_overspend --exact
