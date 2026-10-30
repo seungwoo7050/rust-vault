@@ -1,0 +1,7 @@
+/target
+.env
+.env.*
+!.env.example
+.claude/worktrees/
+.claude/settings.local.json
+guide/
