@@ -11,9 +11,9 @@
     "tools": "cargo 1.97.1, anvil 1.8.7(~/.foundry/bin, PATH에 없을 수 있음), docker"
   },
   "current": {
-    "branch": "03-deposit-reorg",
-    "stage": "docs",
-    "note": "구현·평가·확인 끝(dfc5630). guide(D 모드)와 devlog 서브에이전트 진행 중. 끝나면 04-crash-recovery 브리프"
+    "branch": "04-crash-recovery",
+    "stage": "implement",
+    "note": "03 완료. 04 구현 1차 통과·평가 통과(45c3bb9), 평가가 찾은 테스트 공백 3건(커밋 시점 영구 오류, 40001 재시도, 조합 수 단언) 보강 중"
   },
   "branches": {
     "00-charter": {
@@ -93,7 +93,8 @@
       ],
       "verify": "fmt ✓ clippy ✓ test 5/5 db 25/25 ignored 10 invariants ✓ guards ✓ public ✓ (메인 실행)",
       "mutants": "잡힘 18 가려짐 0 기타 0 (메인 실행)",
-      "docs": "guide·devlog 진행 중(공개 저장소 밖)"
+      "docs": "devlog 완료, guide 완료(작업 42개, 따라 치기 검증 통과: 다른 에이전트가 02-ledger부터 막힘 없이 완주). 공개 저장소 밖",
+      "done": "2026-10-30"
     }
   },
   "blocked": [
