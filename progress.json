@@ -5,15 +5,15 @@
     "commit": "6b4a912"
   },
   "baseline": {
-    "commit": "dfc5630",
-    "note": "03 끝. 04의 시작 기준점",
-    "verify": "fmt ✓ clippy ✓ test 5/5 db 25/25 ignored 10 invariants ✓ guards ✓ public ✓ (메인 실행)",
+    "commit": "33479db",
+    "note": "04 끝. 05의 시작 기준점",
+    "verify": "fmt ✓ clippy ✓ test 5/5 db 31/31 ignored 8 invariants ✓ guards ✓ public ✓ (메인 실행)",
     "tools": "cargo 1.97.1, anvil 1.8.7(~/.foundry/bin, PATH에 없을 수 있음), docker"
   },
   "current": {
-    "branch": "04-crash-recovery",
-    "stage": "implement",
-    "note": "03 완료. 04 구현 1차 통과·평가 통과(45c3bb9), 평가가 찾은 테스트 공백 3건(커밋 시점 영구 오류, 40001 재시도, 조합 수 단언) 보강 중"
+    "branch": "05-withdrawal",
+    "stage": "brief",
+    "note": "04 완료(33479db). 다음: 05 브리프. 04 devlog 서브에이전트 진행 중"
   },
   "branches": {
     "00-charter": {
@@ -94,6 +94,22 @@
       "verify": "fmt ✓ clippy ✓ test 5/5 db 25/25 ignored 10 invariants ✓ guards ✓ public ✓ (메인 실행)",
       "mutants": "잡힘 18 가려짐 0 기타 0 (메인 실행)",
       "docs": "devlog 완료, guide 완료(작업 42개, 따라 치기 검증 통과: 다른 에이전트가 02-ledger부터 막힘 없이 완주). 공개 저장소 밖",
+      "done": "2026-10-30"
+    },
+    "04-crash-recovery": {
+      "commits": "03-deposit-reorg..33479db",
+      "head": "33479db",
+      "worktree": "../rust-vault-04-crash-recovery",
+      "proved": [
+        "T5.1",
+        "T5.2"
+      ],
+      "eval": [
+        "1차 통과(기준 1–5, 커밋 오류 분류 확인됨), 테스트 공백 3건(커밋 시점 영구 오류 경로, 40001 재시도, 늘 참인 조합 수 단언) → 보강(5780ccf, 33479db), TRANSIENT-40001 변형 추가"
+      ],
+      "verify": "fmt ✓ clippy ✓ test 5/5 db 31/31 ignored 8 invariants ✓ guards ✓ public ✓ (메인 실행)",
+      "mutants": "잡힘 22 가려짐 0 기타 0 (메인 실행)",
+      "docs": "devlog 진행 중(공개 저장소 밖)",
       "done": "2026-10-30"
     }
   },
