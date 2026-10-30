@@ -1,2 +1,2 @@
-# RECON-WITHDRAWAL: Confirmed 출금 검증을 건너뛰면 WithdrawalMismatch 단언이 깨져야 한다
-WithdrawalMismatch 불일치를 찾아야 한다
+# RECON-WITHDRAWAL: Confirmed 출금의 온체인 영수증·wd:settle 대조를 건너뛰면 해당 단언이 깨져야 한다
+WithdrawalMismatch 불일치를 찾아야 한다(영수증·wd:settle 검증

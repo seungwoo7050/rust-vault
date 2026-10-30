@@ -9,7 +9,7 @@ mod withdraw;
 
 use vault::chain::{BlockNumber, Hash32};
 use vault::deposit::{ScanConfig, ScanError, Scanner};
-use vault::ledger::AccountKey;
+use vault::ledger::{self, AccountKey, Line, NewEntry};
 use vault::recon::{self, Discrepancy, ReconConfig};
 use vault::store::NoFaults;
 use vault::withdrawal::Status;
@@ -194,35 +194,118 @@ async fn detects_hot_wallet_balance_discrepancy() {
 }
 
 /// (3) 입금·출금 상태와 분개·영수증 불일치(`DepositMismatch`, `WithdrawalMismatch`) 감지.
-/// 변형 `RECON-WITHDRAWAL`이 이 테스트를 깨뜨린다.
+/// 변형 `RECON-WITHDRAWAL`과 `RECON-DEPOSIT`이 이 테스트를 깨뜨린다.
 #[tokio::test]
 async fn detects_deposit_and_withdrawal_mismatches() {
     let w = WEnv::new().await;
     w.deposit(1, 1_000).await;
+    // 두 번째 실제 온체인 입금(나중에 deposits 행을 지워 canonical 블록 역방향 대조를 검증)
+    let deleted_dep_tx = transfer(501, scan::addr(1), 300);
+    let dep_b = w
+        .chain()
+        .mine_canonical(w.chain().tip().hash, vec![deleted_dep_tx]);
+    scan::extend(w.chain(), dep_b, (scan::N - 1) as usize);
+    w.scan().await;
+
     let to1 = withdraw::recipient(1);
     let to2 = withdraw::recipient(2);
+    let to_fail = withdraw::recipient(3);
+    w.chain().revert_to(to_fail);
     w.request("wd-settled", 1, to1, 200).await;
-    w.request("wd-held", 1, to2, 150).await;
+    w.request("wd-bad-settle", 1, to2, 150).await;
+    w.request("wd-failed-nofee", 1, to_fail, 120).await;
     let mut p = w.processor().await;
-    // wd-settled만 먼저 확정
     w.settle(&mut p, scan::N as usize + 1).await;
     assert_eq!(w.status("wd-settled").await, Status::Confirmed);
-    assert_eq!(w.status("wd-held").await, Status::Confirmed);
+    assert_eq!(w.status("wd-bad-settle").await, Status::Confirmed);
+    assert_eq!(w.status("wd-failed-nofee").await, Status::Failed);
 
-    // 새 출금 요청 하나를 Held로 만든 뒤, DB 상태를 강제로 'confirmed'로 변조(서명 tx·영수증·wd:settle 없음)
-    w.request("wd-forged", 1, withdraw::recipient(3), 100).await;
+    // (a) 서명 tx 없이 Held에서 강제로 'confirmed'로 변조 (missing signed_txs row)
+    w.request("wd-forged", 1, withdraw::recipient(4), 100).await;
     sqlx::query("UPDATE withdrawals SET status = 'confirmed' WHERE request_id = 'wd-forged'")
         .execute(w.pool())
         .await
         .unwrap();
 
-    // 성공한 출금(`wd-settled`)의 상태를 강제로 'failed'로 변조(온체인 영수증은 status 1이고 wd:release 없음)
+    // (b) 실제 서명(`Signed`, 유효한 signed_txs 행 보유)만 하고 브로드캐스트·채굴 없이 'confirmed'로 변조
+    //     → recon.rs:809-816 (confirmed withdrawal has no canonical on-chain receipt) 검증
+    w.request("wd-no-receipt", 1, withdraw::recipient(5), 80)
+        .await;
+    let mut p2 = w.processor().await;
+    p2.step().await.unwrap();
+    assert_eq!(w.status("wd-no-receipt").await, Status::Signed);
+    sqlx::query("UPDATE withdrawals SET status = 'confirmed' WHERE request_id = 'wd-no-receipt'")
+        .execute(w.pool())
+        .await
+        .unwrap();
+
+    // (c)–(e) journal_entries는 append-only 트리거가 있으므로 replica 역할로 우회해 손상 주입
+    let mut conn = w.env.conn().await;
+    sqlx::query("SET session_replication_role = replica")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+
+    // (c) 실제 온체인 영수증(status 1)이 있는 Confirmed 출금(`wd-bad-settle`)의 wd:settle 분개 변조
+    //     → recon.rs:851-860 (confirmed withdrawal missing or mismatched wd:settle entry) 검증
+    sqlx::query(
+        "UPDATE journal_entries SET kind = 'corrupt' WHERE idempotency_key = 'wd:settle:wd-bad-settle'",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+
+    // (d) 성공한 출금(`wd-settled`, 영수증 status 1)에서 wd:settle을 지우고 유효한 wd:release를 넣은 뒤 'failed'로 변조
+    //     → recon.rs:895-911 (failed withdrawal has successful on-chain receipt (status 1)) 검증
+    sqlx::query(
+        "DELETE FROM journal_lines WHERE entry_id IN (
+             SELECT id FROM journal_entries WHERE idempotency_key = 'wd:settle:wd-settled'
+         )",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM journal_entries WHERE idempotency_key = 'wd:settle:wd-settled'")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+
+    // (e) 실제 온체인 실행 실패 출금(`wd-failed-nofee`, 영수증 status 0 + wd:release 보유)의 wd:fee 분개 변조
+    //     → recon.rs:912-931 (failed withdrawal missing or mismatched wd:fee entry) 검증
+    sqlx::query(
+        "UPDATE journal_entries SET kind = 'corrupt' WHERE idempotency_key LIKE 'wd:fee:%'",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+
+    sqlx::query("SET session_replication_role = origin")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+
+    let mut tx = w.pool().begin().await.unwrap();
+    ledger::post(
+        &mut tx,
+        NewEntry {
+            idempotency_key: "wd:release:wd-settled".into(),
+            kind: "wd:release".into(),
+            lines: vec![
+                Line::debit(AccountKey::withdrawal_pending(1), model::amt(200)),
+                Line::credit(AccountKey::user(1), model::amt(200)),
+            ],
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
     sqlx::query("UPDATE withdrawals SET status = 'failed' WHERE request_id = 'wd-settled'")
         .execute(w.pool())
         .await
         .unwrap();
 
-    // 온체인에 없던 가짜 confirmed 입금 행을 deposits에 삽입(dep:pending·dep:confirm 분개 없음)
+    // (f) 온체인에 없던 가짜 confirmed 입금 행을 deposits에 삽입(dep:pending·dep:confirm 분개 없음)
     let cursor_hash = w.env.cursor().await.hash;
     let fake_tx = Hash32([0xdd; 32]);
     sqlx::query(
@@ -236,6 +319,14 @@ async fn detects_deposit_and_withdrawal_mismatches() {
     .await
     .unwrap();
 
+    // (g) 실제 온체인 canonical 블록에 들어 있는 입금(`deleted_dep_tx`)의 deposits 행 삭제
+    //     → recon.rs:582-626 (on-chain deposit missing from deposits table) 검증
+    sqlx::query("DELETE FROM deposits WHERE tx_hash = $1")
+        .bind(deleted_dep_tx.hash.to_string())
+        .execute(w.pool())
+        .await
+        .unwrap();
+
     let report = recon::reconcile(w.pool(), w.chain(), &recon_config())
         .await
         .unwrap();
@@ -245,7 +336,17 @@ async fn detects_deposit_and_withdrawal_mismatches() {
             d,
             Discrepancy::DepositMismatch { tx_hash, .. } if *tx_hash == fake_tx
         )),
-        "DepositMismatch 불일치를 찾아야 한다: {:?}",
+        "DepositMismatch 불일치를 찾아야 한다(fake_tx): {:?}",
+        report.discrepancies
+    );
+    assert!(
+        report.discrepancies.iter().any(|d| matches!(
+            d,
+            Discrepancy::DepositMismatch { tx_hash, reason, .. }
+                if *tx_hash == deleted_dep_tx.hash
+                    && reason.contains("on-chain deposit missing from deposits table")
+        )),
+        "온체인 입금의 deposits 행 누락 불일치를 찾아야 한다: {:?}",
         report.discrepancies
     );
     assert!(
@@ -259,9 +360,41 @@ async fn detects_deposit_and_withdrawal_mismatches() {
     assert!(
         report.discrepancies.iter().any(|d| matches!(
             d,
-            Discrepancy::WithdrawalMismatch { request_id, .. } if request_id == "wd-settled"
+            Discrepancy::WithdrawalMismatch { request_id, reason, .. }
+                if request_id == "wd-no-receipt"
+                    && reason.contains("no canonical on-chain receipt")
         )),
-        "WithdrawalMismatch 불일치를 찾아야 한다(wd-settled): {:?}",
+        "WithdrawalMismatch 불일치를 찾아야 한다(영수증·wd:settle 검증: wd-no-receipt): {:?}",
+        report.discrepancies
+    );
+    assert!(
+        report.discrepancies.iter().any(|d| matches!(
+            d,
+            Discrepancy::WithdrawalMismatch { request_id, reason, .. }
+                if request_id == "wd-bad-settle"
+                    && reason.contains("missing or mismatched wd:settle entry")
+        )),
+        "WithdrawalMismatch 불일치를 찾아야 한다(영수증·wd:settle 검증: wd-bad-settle): {:?}",
+        report.discrepancies
+    );
+    assert!(
+        report.discrepancies.iter().any(|d| matches!(
+            d,
+            Discrepancy::WithdrawalMismatch { request_id, reason, .. }
+                if request_id == "wd-settled"
+                    && reason.contains("successful on-chain receipt (status 1)")
+        )),
+        "WithdrawalMismatch 불일치를 찾아야 한다(wd-settled status 1): {:?}",
+        report.discrepancies
+    );
+    assert!(
+        report.discrepancies.iter().any(|d| matches!(
+            d,
+            Discrepancy::WithdrawalMismatch { request_id, reason, .. }
+                if request_id == "wd-failed-nofee"
+                    && reason.contains("missing or mismatched wd:fee entry")
+        )),
+        "WithdrawalMismatch 불일치를 찾아야 한다(wd-failed-nofee): {:?}",
         report.discrepancies
     );
 

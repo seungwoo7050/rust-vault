@@ -1,13 +1,58 @@
 --- a/crates/vault/src/recon.rs
 +++ b/crates/vault/src/recon.rs
-@@ -770,10 +770,5 @@ async fn check_withdrawals<C: ChainClient>(
-             Status::Confirmed => {
-                 let Some((from, nonce, raw, hash)) = signed else {
+@@ -804,54 +804,3 @@ async fn check_withdrawals<C: ChainClient>(
+                 }
+-                let Some(receipt) = rpc(chain.receipt(*hash).await)? else {
 -                    out.push(Discrepancy::WithdrawalMismatch {
 -                        request_id: w.request_id,
--                        tx_hash: None,
--                        reason: "confirmed withdrawal missing signed_txs row".into(),
+-                        tx_hash: Some(*hash),
+-                        reason: "confirmed withdrawal has no canonical on-chain receipt".into(),
 -                    });
-                     continue;
-                 };
-                 if !raw_matches(raw, *hash, *from, *nonce, to, amount) {
+-                    continue;
+-                };
+-                if !receipt.success {
+-                    out.push(Discrepancy::WithdrawalMismatch {
+-                        request_id: w.request_id,
+-                        tx_hash: Some(*hash),
+-                        reason: "confirmed withdrawal has failed on-chain receipt (status 0)"
+-                            .into(),
+-                    });
+-                    continue;
+-                }
+-                if let Some(conf) = confirmed_block
+-                    && receipt.block_number > conf
+-                {
+-                    out.push(Discrepancy::WithdrawalMismatch {
+-                        request_id: w.request_id,
+-                        tx_hash: Some(*hash),
+-                        reason: format!(
+-                            "confirmed withdrawal receipt at block {} > confirmed block {conf}",
+-                            receipt.block_number
+-                        ),
+-                    });
+-                    continue;
+-                }
+-                if let Some(bh_str) = &w.block_hash {
+-                    let bh = parse_hash(bh_str, "withdrawals.block_hash")?;
+-                    if bh != receipt.block_hash {
+-                        out.push(Discrepancy::WithdrawalMismatch {
+-                            request_id: w.request_id,
+-                            tx_hash: Some(*hash),
+-                            reason: "withdrawals.block_hash does not match receipt block_hash"
+-                                .into(),
+-                        });
+-                        continue;
+-                    }
+-                }
+-                let valid_settle = entries.get(&settle_key).is_some_and(|e| {
+-                    matches_settle_lines(e, &wp_acc, *from, amount, receipt.fee())
+-                });
+-                if !valid_settle {
+-                    out.push(Discrepancy::WithdrawalMismatch {
+-                        request_id: w.request_id,
+-                        tx_hash: Some(*hash),
+-                        reason: "confirmed withdrawal missing or mismatched wd:settle entry".into(),
+-                    });
+-                }
++                let _ = (confirmed_block, &w.block_hash, &settle_key);
+             }

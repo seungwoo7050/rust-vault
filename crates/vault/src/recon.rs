@@ -599,21 +599,17 @@ async fn check_deposits<C: ChainClient>(
             on_chain_deposits.insert((t.hash, block.header.hash), (t.to, owner_id, t.value));
             match deposit_map.get(&(t.hash, block.header.hash)) {
                 None => {
-                    if reported.insert((t.hash, block.header.hash)) {
-                        out.push(Discrepancy::DepositMismatch {
-                            tx_hash: t.hash,
-                            block_hash: block.header.hash,
-                            reason: "on-chain deposit missing from deposits table".into(),
-                        });
-                    }
+                    reported.insert((t.hash, block.header.hash));
+                    out.push(Discrepancy::DepositMismatch {
+                        tx_hash: t.hash,
+                        block_hash: block.header.hash,
+                        reason: "on-chain deposit missing from deposits table".into(),
+                    });
                 }
                 Some((addr, uid, amt, status)) => {
-                    if (*addr != t.to
-                        || *uid != owner_id
-                        || *amt != t.value
-                        || status == "reverted")
-                        && reported.insert((t.hash, block.header.hash))
+                    if *addr != t.to || *uid != owner_id || *amt != t.value || status == "reverted"
                     {
+                        reported.insert((t.hash, block.header.hash));
                         out.push(Discrepancy::DepositMismatch {
                             tx_hash: t.hash,
                             block_hash: block.header.hash,
