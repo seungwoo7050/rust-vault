@@ -12,8 +12,8 @@
   },
   "current": {
     "branch": "03-deposit-reorg",
-    "stage": "brief",
-    "note": "02-ledger 완료(4b14e37). 다음: 03 브리프(guide 대상). 02 devlog 서브에이전트 진행 중"
+    "stage": "implement",
+    "note": "브리프 briefs/03-deposit-reorg.md 확정. 구현 worktree ../rust-vault-03-deposit-reorg(02-ledger @ 4b14e37에서). 끝나면 guide(D 모드) 대상"
   },
   "branches": {
     "00-charter": {
