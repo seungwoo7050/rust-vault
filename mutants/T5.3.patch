@@ -1,0 +1,62 @@
+--- a/crates/vault/src/withdrawal.rs
++++ b/crates/vault/src/withdrawal.rs
+@@ -323,7 +323,7 @@ impl<C: ChainClient, S: Signer, K: Clock, F: Faults> Processor<C, S, K, F> {
+         ledger::open_account(&mut conn, &AccountKey::hot_wallet(signer.address())).await?;
+         ledger::open_account(&mut conn, &AccountKey::network_fee()).await?;
+         drop(conn);
+-        Ok(Self {
++        let p = Self {
+             pool,
+             chain,
+             signer,
+@@ -331,7 +331,17 @@ impl<C: ChainClient, S: Signer, K: Clock, F: Faults> Processor<C, S, K, F> {
+             faults,
+             config,
+             queue: VecDeque::new(),
+-        })
++        };
++        // (변형) 재시작 때 `Signed` 출금에 새 nonce를 할당해 다시 서명한다
++        let ids: Vec<String> =
++            sqlx::query_scalar("SELECT request_id FROM withdrawals WHERE status = 'signed'")
++                .fetch_all(&p.pool)
++                .await?;
++        for id in ids {
++            let w = get(&p.pool, &id).await?.expect("출금 행");
++            p.resign(&w).await?;
++        }
++        Ok(p)
+     }
+ 
+     /// 출금 하나의 전이 하나. 이번 회차 작업 줄이 비었으면 DB에서 결론 안 난 출금을 다시 읽는다.
+@@ -444,6 +454,31 @@ impl<C: ChainClient, S: Signer, K: Clock, F: Faults> Processor<C, S, K, F> {
+         Ok(Some(next))
+     }
+ 
++    /// (변형) 새 nonce를 할당해 다시 서명하고 저장한 tx를 덮어쓴다.
++    async fn resign(&self, w: &Withdrawal) -> Result<StoredTx> {
++        let mut tx = self.pool.begin().await?;
++        let from = self.signer.address();
++        let nonce = self.allocate_nonce(&mut tx, from).await?.expect("nonce");
++        let signed = self.signer.sign(TxRequest {
++            chain_id: self.config.chain_id,
++            nonce,
++            to: w.to,
++            value: w.amount.get(),
++            gas_limit: TRANSFER_GAS,
++            max_fee_per_gas: self.config.max_fee_per_gas,
++            max_priority_fee_per_gas: self.config.max_priority_fee_per_gas,
++        })?;
++        sqlx::query("UPDATE signed_txs SET nonce = $2, raw = $3, tx_hash = $4 WHERE request_id = $1")
++            .bind(&w.request_id)
++            .bind(nonce as i64)
++            .bind(&signed.raw)
++            .bind(signed.hash.to_string())
++            .execute(&mut *tx)
++            .await?;
++        tx.commit().await?;
++        self.stored(w).await
++    }
++
+     // ---- Signed → Sent | Unknown ------------------------------------------------------------
+ 
+     /// 저장한 raw tx를 보내고 그 응답을 상태로 쓴다(ADR-003 결정 2).

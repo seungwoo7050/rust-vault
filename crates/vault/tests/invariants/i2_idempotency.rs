@@ -297,6 +297,12 @@ async fn retried_withdrawal_request_holds_once() {
     // 처음 제출과 곧바로 다시 제출
     assert_eq!(w.request(id, 1, to, 30).await.status, Status::Held);
     assert_eq!(w.request(id, 1, to, 30).await.status, Status::Held);
+    assert_eq!(w.rows(id).await, 1, "다시 제출한 뒤 출금 행 수");
+    assert_eq!(
+        w.entries("wd:hold:").await,
+        1,
+        "다시 제출한 뒤 홀드 분개 수"
+    );
 
     // 서명까지 하고 재시작한 뒤 다시 제출
     let mut p = w.processor().await;

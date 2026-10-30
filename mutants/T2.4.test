@@ -1,0 +1,2 @@
+# withdrawals.request_id 유일 제약과 기존 요청 조회를 없애는 변형(T2.4). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i2_idempotency::retried_withdrawal_request_holds_once --exact

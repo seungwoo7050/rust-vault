@@ -1,0 +1,12 @@
+--- a/crates/vault/src/ledger.rs
++++ b/crates/vault/src/ledger.rs
+@@ -423,6 +423,9 @@ async fn write_entry(
+         .fetch_all(&mut *conn)
+         .await?;
+     for key in keys {
++        if entry.kind == "wd:hold" && key.kind() == AccountKind::User {
++            continue;
++        }
+         if balance(conn, key).await? < 0 {
+             return Err(Written::Rejected(PostError::InsufficientFunds(key.clone())));
+         }

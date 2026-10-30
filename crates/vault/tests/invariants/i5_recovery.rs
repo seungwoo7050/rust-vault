@@ -158,8 +158,8 @@ async fn restart_after_sign_resends_same_tx() {
 
     w.settle(&mut p, scan::N as usize + 2).await;
     for (id, to) in [("t5.3-a", a), ("t5.3-b", b)] {
-        assert_eq!(w.status(id).await, Status::Confirmed, "{id}");
         assert_eq!(w.payments_to(to).len(), 1, "{id}: 체인 지급 수");
+        assert_eq!(w.status(id).await, Status::Confirmed, "{id}");
         let stored = w.stored(id).await;
         let sent: Vec<_> = w
             .chain()

@@ -1,0 +1,2 @@
+# 재전송 때마다 nonce를 새로 할당해 다시 서명하는 변형(T6.4). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i6_external_uncertainty::resend_uses_identical_raw_tx --exact

@@ -1,0 +1,48 @@
+--- a/crates/vault/src/withdrawal.rs
++++ b/crates/vault/src/withdrawal.rs
+@@ -444,6 +444,31 @@ impl<C: ChainClient, S: Signer, K: Clock, F: Faults> Processor<C, S, K, F> {
+         Ok(Some(next))
+     }
+ 
++    /// (변형) 새 nonce를 할당해 다시 서명하고 저장한 tx를 덮어쓴다.
++    async fn resign(&self, w: &Withdrawal) -> Result<StoredTx> {
++        let mut tx = self.pool.begin().await?;
++        let from = self.signer.address();
++        let nonce = self.allocate_nonce(&mut tx, from).await?.expect("nonce");
++        let signed = self.signer.sign(TxRequest {
++            chain_id: self.config.chain_id,
++            nonce,
++            to: w.to,
++            value: w.amount.get(),
++            gas_limit: TRANSFER_GAS,
++            max_fee_per_gas: self.config.max_fee_per_gas,
++            max_priority_fee_per_gas: self.config.max_priority_fee_per_gas,
++        })?;
++        sqlx::query("UPDATE signed_txs SET nonce = $2, raw = $3, tx_hash = $4 WHERE request_id = $1")
++            .bind(&w.request_id)
++            .bind(nonce as i64)
++            .bind(&signed.raw)
++            .bind(signed.hash.to_string())
++            .execute(&mut *tx)
++            .await?;
++        tx.commit().await?;
++        self.stored(w).await
++    }
++
+     // ---- Signed → Sent | Unknown ------------------------------------------------------------
+ 
+     /// 저장한 raw tx를 보내고 그 응답을 상태로 쓴다(ADR-003 결정 2).
+@@ -454,6 +479,13 @@ impl<C: ChainClient, S: Signer, K: Clock, F: Faults> Processor<C, S, K, F> {
+         // 응답을 받고 상태를 쓰기 전에 죽으면 `Signed`로 남는다. 재시작이 같은 바이트를 다시 보내고
+         // 노드는 "already known"이나 "nonce too low"를 돌려준다(결정 7, T5.3)
+         self.inject(FaultPoint::AfterSend)?;
++        // (변형) "nonce too low"면 새 nonce로 다시 서명해 보낸다
++        if let RpcOutcome::Definite(e) = &outcome
++            && e.send_rejection() == SendRejection::NonceTooLow
++        {
++            let st = self.resign(w).await?;
++            self.chain.send_raw(&st.raw).await;
++        }
+         let to = status_after_send(&outcome);
+         let tx = self.pool.begin().await?;
+         self.finish(tx, w, Status::Signed, to).await

@@ -1,0 +1,2 @@
+# 되감기에서 결론 난 출금 대조를 빼는 변형(표 밖, ADR-003 결정 6). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test withdrawal -- deep_reorg_of_confirmed_withdrawal_halts --exact

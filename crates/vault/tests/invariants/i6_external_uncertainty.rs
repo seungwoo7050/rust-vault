@@ -127,11 +127,11 @@ async fn nonce_conflict_never_double_pays() {
     let before = w.chain().received().len();
     let mut p = w.processor().await;
     assert_moved(p.step().await, Status::Signed, Status::Sent);
+    w.settle(&mut p, scan::N as usize + 1).await;
+    assert_eq!(w.payments_to(a).len(), 1, "(가) 체인 지급 수");
+    assert_eq!(w.status("t6.3-a").await, Status::Confirmed, "(가)");
     let resent = &w.chain().received()[before..];
     assert_eq!(resent, [w.stored("t6.3-a").await.raw], "재시작 뒤 재전송");
-    w.settle(&mut p, scan::N as usize + 1).await;
-    assert_eq!(w.status("t6.3-a").await, Status::Confirmed, "(가)");
-    assert_eq!(w.payments_to(a).len(), 1, "(가) 체인 지급 수");
 
     // (나) 외부 tx가 다음 nonce를 먼저 쓰고 채굴된다. 그 뒤 우리 출금이 같은 nonce로 서명된다
     let nonce = w.chain().pending_nonce(withdraw::hot());
@@ -141,14 +141,14 @@ async fn nonce_conflict_never_double_pays() {
     let b = withdraw::recipient(2);
     w.request("t6.3-b", 1, b, 200).await;
     w.settle(&mut p, scan::N as usize + 1).await;
+    assert_eq!(w.status("t6.3-b").await, Status::NeedsReview, "(나)");
+    assert_held(&w, "t6.3-b", 200, 700).await;
+    assert_eq!(w.payments_to(b).len(), 0, "(나) 우리 지급 수");
     assert_eq!(
         w.stored("t6.3-b").await.nonce,
         nonce,
         "외부 tx와 같은 nonce"
     );
-    assert_eq!(w.status("t6.3-b").await, Status::NeedsReview, "(나)");
-    assert_held(&w, "t6.3-b", 200, 700).await;
-    assert_eq!(w.payments_to(b).len(), 0, "(나) 우리 지급 수");
     assert_eq!(w.signed_rows().await, 2, "새 서명 tx가 생겼다");
     w.env.db.drop_db().await;
 }

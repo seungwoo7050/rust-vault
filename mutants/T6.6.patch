@@ -1,0 +1,47 @@
+--- a/crates/vault/src/withdrawal.rs
++++ b/crates/vault/src/withdrawal.rs
+@@ -444,6 +444,31 @@ impl<C: ChainClient, S: Signer, K: Clock, F: Faults> Processor<C, S, K, F> {
+         Ok(Some(next))
+     }
+ 
++    /// (변형) 새 nonce를 할당해 다시 서명하고 저장한 tx를 덮어쓴다.
++    async fn resign(&self, w: &Withdrawal) -> Result<StoredTx> {
++        let mut tx = self.pool.begin().await?;
++        let from = self.signer.address();
++        let nonce = self.allocate_nonce(&mut tx, from).await?.expect("nonce");
++        let signed = self.signer.sign(TxRequest {
++            chain_id: self.config.chain_id,
++            nonce,
++            to: w.to,
++            value: w.amount.get(),
++            gas_limit: TRANSFER_GAS,
++            max_fee_per_gas: self.config.max_fee_per_gas,
++            max_priority_fee_per_gas: self.config.max_priority_fee_per_gas,
++        })?;
++        sqlx::query("UPDATE signed_txs SET nonce = $2, raw = $3, tx_hash = $4 WHERE request_id = $1")
++            .bind(&w.request_id)
++            .bind(nonce as i64)
++            .bind(&signed.raw)
++            .bind(signed.hash.to_string())
++            .execute(&mut *tx)
++            .await?;
++        tx.commit().await?;
++        self.stored(w).await
++    }
++
+     // ---- Signed → Sent | Unknown ------------------------------------------------------------
+ 
+     /// 저장한 raw tx를 보내고 그 응답을 상태로 쓴다(ADR-003 결정 2).
+@@ -482,7 +507,11 @@ impl<C: ChainClient, S: Signer, K: Clock, F: Faults> Processor<C, S, K, F> {
+                 .await
+             {
+                 RpcOutcome::Ok(n) if n > st.nonce => return self.nonce_taken(w).await,
+-                RpcOutcome::Ok(_) => Some(self.resend(&st).await),
++                RpcOutcome::Ok(_) => {
++                    // (변형) 재전송 때마다 nonce를 새로 할당해 다시 서명한다
++                    let st = self.resign(w).await?;
++                    Some(self.resend(&st).await)
++                }
+                 // 확정 nonce를 모른다. 이번에는 아무것도 하지 않는다
+                 _ => None,
+             },
