@@ -1,0 +1,2 @@
+# 0원 출금 검사를 없앤 변형. zero_amount_rejected가 잡아야 한다
+-- zero_amount_rejected

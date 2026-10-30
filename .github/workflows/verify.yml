@@ -1,0 +1,15 @@
+# 로컬과 같은 명령 하나만 부른다. Postgres는 services 대신 verify.sh full이 compose.yaml로 띄운다.
+name: verify
+on:
+  push:
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: scripts/harness/verify.sh full

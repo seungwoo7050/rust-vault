@@ -1,0 +1,12 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -8,9 +8,6 @@
+ }
+ 
+ pub fn withdraw(balance: u64, amount: u64) -> Result<u64, Rejected> {
+-    if amount == 0 {
+-        return Err(Rejected::ZeroAmount);
+-    }
+     // 첫 겹: 잔액보다 큰 출금을 거부한다
+     if amount > balance {
+         return Err(Rejected::Overdraft);

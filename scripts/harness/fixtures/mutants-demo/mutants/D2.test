@@ -1,0 +1,2 @@
+# 잔액 검사를 없앤 변형. checked_sub가 대신 거부해 overdraft_rejected는 통과한다(가려짐)
+-- overdraft_rejected

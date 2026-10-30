@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["crates/vault", "crates/vault-sim"]
+# 변형 검사 도구(mutants.sh)의 자체 테스트용 crate. workspace 밖에서 따로 빌드한다
+exclude = ["scripts/harness/fixtures/mutants-demo"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

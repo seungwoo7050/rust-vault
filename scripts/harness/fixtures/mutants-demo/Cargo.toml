@@ -1,0 +1,6 @@
+# mutants.sh 자체 테스트용 crate. workspace 밖(루트 Cargo.toml의 exclude)이다
+[package]
+name = "mutants-demo"
+version = "0.1.0"
+edition = "2024"
+publish = false
