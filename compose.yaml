@@ -1,0 +1,15 @@
+# 테스트용 Postgres. verify.sh full이 띄운다. 호스트 포트는 흔한 5432·5433과 겹치지 않게 55433
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: vault
+      POSTGRES_PASSWORD: vault
+      POSTGRES_DB: vault
+    ports:
+      - "55433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vault -d vault"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
