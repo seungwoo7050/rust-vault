@@ -40,6 +40,7 @@
    - `Indeterminate`면 `Unknown`.
    - 그 밖의 `Definite` 오류(예: "insufficient funds", 노드의 일시 거절)도 `Unknown`이다. 이 노드가 지금 거절했다는 사실이 앞서 보낸 같은 tx가 다른 곳에 없다는 증거는 아니다. 전송 오류만으로 `Failed`가 되는 전이는 없다.
    - `Unknown`과 `Sent`는 같은 조회 루틴으로 결론 낸다. 조회 루틴의 재전송 응답이 `Ok`·"already known"이면 `Sent`, 그 밖이면 상태를 그대로 둔다(되돌아가는 전이 없음).
+   - 구현(`vault::withdrawal`): 요청은 `request`가 요청 행과 홀드 분개를 한 트랜잭션에 쓴다. 잔액 검사는 원장이 계정을 잠그고 하므로 동시 요청도 잔액을 넘지 못한다. 같은 `request_id`에 내용(사용자·수취인·금액)이 다른 요청은 `RequestConflict`다. `Processor::step`은 결론 안 난 출금(요청 순서) 중 하나를 골라 전이 하나를 DB 트랜잭션 하나로 하고, 모든 커밋은 `store::commit`(`Site::Withdrawal`)을 거친다. 첫 전송의 응답을 상태로 바꾸는 것은 `status_after_send` 하나, 재전송 응답은 `resend_accepted` 하나다. `NeedsReview`에서의 재전송이 받아들여져도 `Sent`로 돌아가지 않는다(사람에게 보인 표시는 결론만 끝낸다).
 3. **결론은 체인 조회로만.** 저장한 tx 해시로 영수증을 조회한다.
    - 영수증이 있고 그 블록의 확정 수가 N 이상이면 status에 따라 `Confirmed`(지급 분개) 또는 `Failed`(가스비 분개 + 홀드 해제). 확정 수 계산은 [ADR-002](002-reorg-handling.md)와 같다.
    - 영수증이 있다가 reorg로 사라지면 `Sent`로 돌아가 같은 raw tx를 다시 보낸다.
@@ -48,10 +49,13 @@
    - 정해진 기한(설정값) 안에 결론이 안 나면 `NeedsReview`. 홀드는 유지한다. 자동 `Failed`는 없다.
    - `NeedsReview`는 "사람이 봐야 한다"는 표시이지 결론이 아니다. 조회 루틴은 `NeedsReview`에서도 계속 돌고, 영수증이 확정 수 N에 이르면 위와 같이 `Confirmed`(지급 분개) 또는 `Failed`로 간다. 시간이 지났다는 이유만으로는 어떤 상태도 `Failed`가 되지 않는다(I6).
    - 기한은 `Clock` trait로 잰다. 테스트는 가짜 시계를 앞으로 돌려 기한 전후를 만든다.
+   - 구현: 확정 수는 입금 스캐너의 커서로 센다. 영수증의 블록 해시가 저장된 canonical 헤더(고아 아님, 같은 번호)에 있고 커서 번호 − 영수증 블록 번호 + 1 ≥ N이어야 결론이다. "확정된 nonce"는 `nonce_at(주소, 커서 − N + 1)`이다. 한 번의 조회는 영수증 → (없으면) 확정 nonce → (내 nonce 이하면) 같은 raw tx 재전송 순이고, 결론이 없으면 기한을 본다. 기한의 시작은 서명 시각(`signed_txs.signed_at`)이다. 결론을 낸 영수증의 블록 해시를 `withdrawals.block_hash`에 남긴다(결정 6의 감지).
 4. **재전송은 같은 바이트만.** 재시작 루틴, `Unknown`, reorg 뒤 재전송 모두 저장된 raw tx를 그대로 보낸다. 다시 서명하는 코드 경로를 두지 않는다. 서명 함수는 `Held → Signed` 전이에서만 부른다.
 5. **nonce 할당.** `wallet_nonces(address, next_nonce)` 행을 `SELECT … FOR UPDATE`로 잠그고 할당·증가한다. 처음 한 번만 체인의 확정 nonce로 초기화하고, 그 뒤로는 DB가 원본이다. 출금 주소의 키를 이 시스템 밖에서 쓰지 않는다는 것이 운영 전제다(어기면 3의 `NeedsReview`로 드러난다).
 6. **확정 뒤 깊이의 reorg.** `Confirmed` 출금의 tx가 확정 수 N보다 깊은 reorg로 빠지면 입금과 같이 정책 가정이 깨진 것이다([ADR-002](002-reorg-handling.md) 결정 7). 원장은 바꾸지 않고(지급 분개를 되돌리지 않는다) `finality_violations`에 출금으로 기록하고 출금 처리를 멈춘다. 감지는 입금 스캐너의 되감기가 한다(ADR-002 결정 7): 고아가 될 블록에 `Confirmed` 출금의 tx 해시가 있으면 위반이다. 같은 raw tx가 새 분기에 다시 들어갈 수 있으므로 자동 재전송·재서명도 하지 않는다.
+   - 구현: 스캐너는 블록의 tx 목록을 저장하지 않으므로, "고아가 될 블록에 그 tx가 있다"를 "결론을 낸 영수증의 블록(`withdrawals.block_hash`)이 고아가 될 canonical 헤더다"로 본다. `Failed` 출금도 같이 본다: 홀드를 푼 뒤 같은 raw tx가 새 분기에서 성공하면 이중 지급이 되기 때문이다. 사고 기록이 하나라도 있으면(입금 사고 포함) `Processor`는 체인에 아무것도 보내지 않고 `Halted`를 돌려준다. 요청(`request`)은 계속 받는다(홀드만 한다).
 7. **재시작 루틴.** `Signed`는 다시 보내고, `Sent`·`Unknown`·`NeedsReview`는 조회 루틴에 넣는다(결정 3: `NeedsReview`도 영수증으로 결론 난다). 전송 직후 상태를 쓰기 전에 죽었으면 `Signed`로 남아 같은 바이트가 다시 나가고, 노드는 "already known"을 돌려준다(I5).
+   - 구현: 재시작은 `Processor::new`를 다시 부르는 것이고 따로 도는 복구 루틴은 없다. 상태가 모두 DB에 있어 평소의 `step`이 `Held`는 서명, `Signed`는 저장한 raw tx 전송, 나머지는 조회로 그대로 이어 간다. 전송 직후 지점은 `FaultPoint::AfterSend`다. 그 사이 tx가 채굴됐으면 응답은 "nonce too low"이고 이것도 `Sent`다.
 
 ## 검증
 

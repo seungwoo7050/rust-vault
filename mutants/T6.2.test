@@ -1,0 +1,2 @@
+# 기한이 지나면 Unknown·NeedsReview를 Failed로 바꾸고 홀드를 푸는 변형(T6.2). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i6_external_uncertainty::lost_response_resolved_by_receipt --exact

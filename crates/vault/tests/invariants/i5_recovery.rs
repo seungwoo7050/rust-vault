@@ -9,11 +9,14 @@ use proptest::collection::vec;
 use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::TestRunner;
 use vault::deposit::ScanError;
+use vault::signer::decode;
 use vault::store::{FaultPoint, Injected, Site};
+use vault::withdrawal::{Status, WithdrawalError};
 
 use crate::history::{self, Op, Script};
 use crate::model;
 use crate::scan::{self, Env};
+use crate::withdraw::{self, WEnv};
 
 // T5.1 실패해야 할 변형: 커서 전진을 원장 반영보다 먼저 별도 트랜잭션으로 커밋("커서 커밋 직후" 지점에서 죽으면 그 블록의 입금이 빠진다)
 #[test]
@@ -107,12 +110,75 @@ fn transient_db_error_leaves_no_partial_state() {
 }
 
 // T5.3 실패해야 할 변형: 재시작 때 `Signed` 출금에 nonce를 새로 할당해 다시 서명(같은 nonce로 다시 서명하면 결정적 서명이라 같은 바이트가 나와 변형이 안 된다)
-#[test]
-#[ignore = "05-withdrawal"]
-fn restart_after_sign_resends_same_tx() {
-    unimplemented!(
-        "T5.3: 서명 tx 커밋 직후, 전송 직후 종료 후 재시작. 단언: 출금마다 체인 지급 1회, 보낸 raw tx가 저장본과 같다"
+#[tokio::test]
+async fn restart_after_sign_resends_same_tx() {
+    let w = WEnv::new().await;
+    w.deposit(1, 1_000).await;
+
+    // (1) 서명 tx 커밋 직후 종료: `Signed`로 남고 아직 아무것도 안 보냈다
+    let a = withdraw::recipient(1);
+    w.request("t5.3-a", 1, a, 100).await;
+    w.env.faults.fail_next(
+        FaultPoint::AfterCommit(Site::Withdrawal),
+        1,
+        Injected::Crash,
     );
+    let mut p = w.processor().await;
+    let got = p.run_until_idle().await;
+    assert!(
+        matches!(
+            got,
+            Err(WithdrawalError::Crashed(FaultPoint::AfterCommit(
+                Site::Withdrawal
+            )))
+        ),
+        "서명 커밋 직후 종료: {got:?}"
+    );
+    assert_eq!(w.status("t5.3-a").await, Status::Signed);
+    assert!(w.chain().received().is_empty(), "종료 전에 보냈다");
+    let mut p = w.processor().await;
+    p.run_until_idle().await.unwrap();
+    assert_eq!(w.status("t5.3-a").await, Status::Sent);
+
+    // (2) 전송 직후(응답을 받고 상태를 쓰기 전) 종료: `Signed`로 남고 tx는 노드에 있다
+    let b = withdraw::recipient(2);
+    w.request("t5.3-b", 1, b, 200).await;
+    w.env
+        .faults
+        .fail_next(FaultPoint::AfterSend, 1, Injected::Crash);
+    let got = p.run_until_idle().await;
+    assert!(
+        matches!(got, Err(WithdrawalError::Crashed(FaultPoint::AfterSend))),
+        "전송 직후 종료: {got:?}"
+    );
+    assert_eq!(w.status("t5.3-b").await, Status::Signed);
+    let mut p = w.processor().await;
+    p.run_until_idle().await.unwrap();
+    assert_eq!(w.status("t5.3-b").await, Status::Sent);
+
+    w.settle(&mut p, scan::N as usize + 2).await;
+    // 보낸 raw tx가 저장본과 같은지를 먼저 본다. 재시작 뒤 다시 서명했다면 (2)의 전송 직후 종료 전에
+    // 나간 바이트가 저장본(새 서명)과 다르다
+    for (id, to) in [("t5.3-a", a), ("t5.3-b", b)] {
+        let stored = w.stored(id).await;
+        let sent: Vec<_> = w
+            .chain()
+            .received()
+            .into_iter()
+            .filter(|r| decode(r).is_some_and(|d| d.to == to))
+            .collect();
+        assert!(!sent.is_empty(), "{id}: 보낸 tx가 없다");
+        assert!(
+            sent.iter().all(|r| *r == stored.raw),
+            "{id}: 보낸 raw tx {}개 중 저장본과 다른 것이 있다",
+            sent.len()
+        );
+    }
+    for (id, to) in [("t5.3-a", a), ("t5.3-b", b)] {
+        assert_eq!(w.payments_to(to).len(), 1, "{id}: 체인 지급 수");
+        assert_eq!(w.status(id).await, Status::Confirmed, "{id}");
+    }
+    w.env.db.drop_db().await;
 }
 
 /// 고정 시나리오 하나와 proptest로 만든 시나리오 몇 개. 끝에는 언제나 빈 블록 N개와 스캔을 붙여 모두 확정한다.

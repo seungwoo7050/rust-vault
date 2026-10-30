@@ -1,0 +1,42 @@
+--- a/crates/vault/migrations/0004_withdrawal.sql
++++ b/crates/vault/migrations/0004_withdrawal.sql
+@@ -3,7 +3,7 @@
+ 
+ -- 출금 요청. 같은 request_id는 한 행뿐이다(I2)
+ CREATE TABLE withdrawals (
+-    request_id        text          PRIMARY KEY CHECK (request_id <> ''),
++    request_id        text          NOT NULL CHECK (request_id <> ''),
+     user_id           bigint        NOT NULL,
+     to_address        text          NOT NULL CHECK (to_address ~ '^0x[0-9a-f]{40}$'),
+     amount            numeric(78,0) NOT NULL CHECK (amount > 0),
+@@ -21,7 +21,7 @@ CREATE INDEX withdrawals_open ON withdrawals (created_at, request_id)
+ 
+ -- 서명한 tx. 출금 하나에 하나뿐이고, 재전송은 이 raw 바이트만 보낸다(결정 4)
+ CREATE TABLE signed_txs (
+-    request_id   text        NOT NULL UNIQUE REFERENCES withdrawals (request_id),
++    request_id   text        NOT NULL UNIQUE,
+     from_address text        NOT NULL CHECK (from_address ~ '^0x[0-9a-f]{40}$'),
+     nonce        bigint      NOT NULL CHECK (nonce >= 0),
+     raw          bytea       NOT NULL,
+--- a/crates/vault/src/withdrawal.rs
++++ b/crates/vault/src/withdrawal.rs
+@@ -226,9 +226,6 @@ type Result<T, E = WithdrawalError> = std::result::Result<T, E>;
+ /// - 같은 `request_id`가 이미 있으면 아무것도 쓰지 않고 기존 행을 돌려준다(I2). 내용이 다르면 `RequestConflict`.
+ /// - `user:u` 잔액이 모자라면 `Rejected` 행만 남기고 분개는 없다. 잔액 검사는 원장이 계정을 잠그고 한다.
+ pub async fn request(pool: &PgPool, req: WithdrawalRequest) -> Result<Withdrawal> {
+-    if let Some(existing) = get(pool, &req.request_id).await? {
+-        return same_request(existing, &req);
+-    }
+     let user = AccountKey::user(req.user);
+     let mut tx = pool.begin().await?;
+     ledger::open_account(&mut tx, &user).await?;
+@@ -802,8 +799,7 @@ async fn insert_request(
+     let n = sqlx::query(
+         "INSERT INTO withdrawals
+              (request_id, user_id, to_address, amount, status, created_at, status_changed_at)
+-         VALUES ($1, $2, $3, $4::numeric, $5, now(), now())
+-         ON CONFLICT (request_id) DO NOTHING",
++         VALUES ($1, $2, $3, $4::numeric, $5, now(), now())",
+     )
+     .bind(&req.request_id)
+     .bind(req.user)

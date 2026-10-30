@@ -1,0 +1,19 @@
+--- a/crates/vault/src/withdrawal.rs
++++ b/crates/vault/src/withdrawal.rs
+@@ -402,10 +402,14 @@ impl<C: ChainClient, S: Signer, K: Clock, F: Faults> Processor<C, S, K, F> {
+             return Ok(waiting(w));
+         }
+         let from = self.signer.address();
+-        let Some(nonce) = self.allocate_nonce(&mut tx, from).await? else {
+-            // 처음 nonce를 체인에서 못 읽었다. 아무것도 쓰지 않고 다음 회차에 다시 본다
++        // (변형) nonce 할당을 서명 tx 저장과 다른 트랜잭션으로 먼저 커밋한다
++        let mut ntx = self.pool.begin().await?;
++        let Some(nonce) = self.allocate_nonce(&mut ntx, from).await? else {
+             return Ok(waiting(w));
+         };
++        store::commit(ntx, &self.faults, Site::Withdrawal)
++            .await
++            .map_err(commit_error)?;
+         let signed = self.signer.sign(TxRequest {
+             chain_id: self.config.chain_id,
+             nonce,

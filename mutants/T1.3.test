@@ -1,0 +1,2 @@
+# 홀드 분개의 사용자 잔액 음수 검사를 없애는 변형(T1.3). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i1_asset_safety::hold_rejects_overspend --exact

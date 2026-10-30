@@ -3,18 +3,23 @@
 //! - 분기: 아무 블록 위에나 `mine`으로 블록을 붙인다. 해시는 (부모, 번호, 소금)의 sha256이라 결정적이다.
 //!   소금은 지금까지 캔 블록 수라 같은 부모 위의 두 블록도 해시가 다르다.
 //! - reorg: `set_canonical(tip)`으로 canonical을 바꾼다. 새로 canonical이 된 블록마다 새 head 알림이 쌓인다.
-//! - 장애: `fail_next`(다음 n번 조회를 `Indeterminate`/`Definite`로), `none_at`(그 번호를 n번 `None`으로).
+//! - 장애: `fail_next`(다음 n번 호출을 `Indeterminate`/`Definite`/`LostResponse`로), `none_at`(그 번호를 n번 `None`으로).
+//! - 계정과 멤풀: `send_raw`로 받은 tx는 서명자를 복구해 멤풀에 넣고, `mine`이 부모까지의 경로에서 센 계정 nonce
+//!   순서대로 멤풀의 tx를 블록에 담는다(담은 tx는 멤풀에서 뺀다). reorg로 빠진 tx는 멤풀로 돌아가지 않는다
+//!   (노드가 잊은 경우. 다시 보내야 들어간다). `external_send`는 이 시스템 밖에서 같은 키로 보낸 tx를 넣는다.
+//!   노드가 받은 raw tx는 `received`에 모두 남는다.
 //!
 //! 핸들(`Clone`)을 여럿 둘 수 있다. 스캐너에 하나를 넘기고 테스트가 다른 하나로 체인을 바꾼다.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 use vault::chain::{
-    Address, Block, BlockHeader, BlockNumber, ChainClient, ChainTx, Hash32, Notification, RpcError,
-    RpcOutcome,
+    Address, Block, BlockHeader, BlockNumber, ChainClient, ChainTx, Hash32, Notification, Receipt,
+    RpcError, RpcOutcome,
 };
+use vault::signer::{self, TRANSFER_GAS};
 
 /// 장애를 넣을 조회.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +29,12 @@ pub enum Call {
     Block,
     /// 이 번호의 블록 조회
     BlockAt(BlockNumber),
+    /// raw tx 전송
+    SendRaw,
+    /// 영수증 조회
+    Receipt,
+    /// 계정 nonce 조회
+    NonceAt,
 }
 
 /// 넣을 장애.
@@ -33,6 +44,17 @@ pub enum Fault {
     Indeterminate,
     /// 노드가 거절함
     Definite,
+    /// 요청은 반영하고 응답만 버림(결과는 `Indeterminate`). 전송에만 뜻이 있고, 조회에서는 `Indeterminate`와 같다
+    LostResponse,
+}
+
+/// 멤풀이나 블록에 든 계정 tx의 보낸 쪽 정보.
+#[derive(Debug, Clone, Copy)]
+struct Sender {
+    from: Address,
+    nonce: u64,
+    max_fee_per_gas: u128,
+    max_priority_fee_per_gas: u128,
 }
 
 #[derive(Debug)]
@@ -53,6 +75,15 @@ struct Inner {
     nones: HashMap<BlockNumber, usize>,
     notifications: Vec<Notification>,
     calls: usize,
+    /// 계정 tx(보낸 쪽이 있는 tx)의 보낸 쪽 정보. 입금 테스트의 `transfer`에는 없다
+    senders: HashMap<Hash32, Sender>,
+    /// 멤풀(받은 순서). 블록에 담기면 뺀다
+    pool: Vec<ChainTx>,
+    /// 노드가 받은 raw tx 전부(받은 순서). 응답을 버린 것과 거절한 것도 들어 있다
+    received: Vec<Vec<u8>>,
+    /// 이 수취인에게 가는 계정 tx는 실행이 실패한다(status 0, 가스비는 낸다)
+    reverts: HashSet<Address>,
+    base_fee: u128,
 }
 
 /// 가짜 체인 핸들.
@@ -91,6 +122,11 @@ impl FakeChain {
             nones: HashMap::new(),
             notifications: vec![],
             calls: 0,
+            senders: HashMap::new(),
+            pool: vec![],
+            received: vec![],
+            reverts: HashSet::new(),
+            base_fee: BASE_FEE,
         })))
     }
 
@@ -104,9 +140,12 @@ impl FakeChain {
     }
 
     /// `parent` 위에 블록을 하나 캔다. canonical은 바꾸지 않는다.
+    /// 블록에는 `txs` 뒤에 멤풀의 tx가 계정별 nonce 순서로 들어간다(부모까지의 경로에서 다음 nonce인 것만).
     pub fn mine(&self, parent: Hash32, txs: Vec<ChainTx>) -> Hash32 {
         let mut g = self.inner();
         let parent_number = g.blocks.get(&parent).expect("없는 부모 블록").header.number;
+        let mut txs = txs;
+        g.take_from_pool(parent, &mut txs);
         let number = parent_number.0 + 1;
         let hash = block_hash(parent, number, g.mined);
         g.mined += 1;
@@ -182,6 +221,13 @@ impl FakeChain {
         });
     }
 
+    /// 걸어 두고 아직 쓰이지 않은 조회·전송 장애를 모두 지운다.
+    pub fn clear_faults(&self) {
+        let mut g = self.inner();
+        g.rules.clear();
+        g.nones.clear();
+    }
+
     /// 다음 `n`번의 `number` 블록 조회에 `Ok(None)`("아직 없음")을 돌려준다. head는 그대로다.
     pub fn none_at(&self, number: BlockNumber, n: usize) {
         *self.inner().nones.entry(number).or_default() += n;
@@ -192,13 +238,169 @@ impl FakeChain {
         std::mem::take(&mut self.inner().notifications)
     }
 
-    /// 지금까지 받은 조회 수(head, 블록 조회 합).
+    /// 지금까지 받은 호출 수(head, 블록·영수증·nonce 조회, 전송 합).
     pub fn calls(&self) -> usize {
         self.inner().calls
     }
+
+    /// 노드가 받은 raw tx 전부(받은 순서).
+    pub fn received(&self) -> Vec<Vec<u8>> {
+        self.inner().received.clone()
+    }
+
+    /// 앞으로 `to`에게 가는 계정 tx는 실행이 실패한다(status 0).
+    pub fn revert_to(&self, to: Address) {
+        self.inner().reverts.insert(to);
+    }
+
+    /// 이 시스템 밖에서 같은 키로 보낸 tx를 멤풀에 넣는다(F5). 해시는 (from, nonce, to, value)로 정해진다.
+    pub fn external_send(&self, from: Address, nonce: u64, to: Address, value: u128) -> Hash32 {
+        let mut h = Sha256::new();
+        h.update(b"external");
+        h.update(from.0);
+        h.update(nonce.to_be_bytes());
+        h.update(to.0);
+        h.update(value.to_be_bytes());
+        let hash = Hash32(h.finalize().into());
+        let mut g = self.inner();
+        let fee = g.base_fee;
+        g.senders.insert(
+            hash,
+            Sender {
+                from,
+                nonce,
+                max_fee_per_gas: fee,
+                max_priority_fee_per_gas: 0,
+            },
+        );
+        g.pool.push(ChainTx {
+            hash,
+            to,
+            value,
+            success: true,
+        });
+        hash
+    }
+
+    /// 멤풀까지 친 다음 nonce(canonical tip의 nonce와 멤풀에서 이어지는 tx 수).
+    pub fn pending_nonce(&self, from: Address) -> u64 {
+        let g = self.inner();
+        let tip = *g.canonical.last().unwrap();
+        let mut next = g.nonce_on_path(tip, from);
+        while g.pool.iter().any(|t| {
+            g.senders
+                .get(&t.hash)
+                .is_some_and(|s| s.from == from && s.nonce == next)
+        }) {
+            next += 1;
+        }
+        next
+    }
+
+    /// 지금 멤풀에 있는 tx 해시.
+    pub fn pool(&self) -> Vec<Hash32> {
+        self.inner().pool.iter().map(|t| t.hash).collect()
+    }
 }
 
+/// 가짜 체인의 기본 base fee(wei). 실효 가스 가격은 min(최대 수수료, base fee + 우선 수수료)다.
+pub const BASE_FEE: u128 = 7;
+
 impl Inner {
+    /// genesis부터 `tip`까지의 경로.
+    fn path_to(&self, tip: Hash32) -> Vec<Hash32> {
+        let mut path = vec![];
+        let mut cur = tip;
+        loop {
+            path.push(cur);
+            let b = &self.blocks[&cur];
+            if b.header.number.0 == 0 {
+                break;
+            }
+            cur = b.header.parent_hash;
+        }
+        path.reverse();
+        path
+    }
+
+    /// `tip`까지의 경로에서 `from`이 보낸 계정 tx 수(= 다음 nonce. 담을 때 nonce 순서를 지킨다).
+    fn nonce_on_path(&self, tip: Hash32, from: Address) -> u64 {
+        self.path_to(tip)
+            .iter()
+            .flat_map(|h| self.blocks[h].txs.iter())
+            .filter(|t| self.senders.get(&t.hash).is_some_and(|s| s.from == from))
+            .count() as u64
+    }
+
+    /// 멤풀에서 `parent` 다음 블록에 들어갈 tx를 꺼내 `txs` 뒤에 붙인다. 실행 실패 수취인이면 status 0이다.
+    fn take_from_pool(&mut self, parent: Hash32, txs: &mut Vec<ChainTx>) {
+        let mut next: HashMap<Address, u64> = HashMap::new();
+        loop {
+            let pick = self.pool.iter().position(|t| {
+                let s = self.senders[&t.hash];
+                let n = *next
+                    .entry(s.from)
+                    .or_insert_with(|| self.nonce_on_path(parent, s.from));
+                s.nonce == n
+            });
+            let Some(i) = pick else { break };
+            let mut t = self.pool.remove(i);
+            let s = self.senders[&t.hash];
+            *next.get_mut(&s.from).unwrap() += 1;
+            t.success = !self.reverts.contains(&t.to);
+            txs.push(t);
+        }
+    }
+
+    fn canonical_tx(&self, hash: Hash32) -> Option<(BlockHeader, ChainTx)> {
+        self.canonical.iter().find_map(|h| {
+            let b = &self.blocks[h];
+            b.txs
+                .iter()
+                .find(|t| t.hash == hash)
+                .map(|t| (b.header, *t))
+        })
+    }
+
+    /// 받은 raw tx를 반영한다. 노드의 판단 순서: 이미 쓰인 nonce → 멤풀에 같은 tx → 같은 nonce의 다른 tx.
+    fn accept(&mut self, raw: &[u8]) -> RpcOutcome<Hash32> {
+        let reject = |m: &str| RpcOutcome::Definite(RpcError(m.into()));
+        let Some(d) = signer::decode(raw) else {
+            return reject("invalid transaction");
+        };
+        let tip = *self.canonical.last().unwrap();
+        if self.canonical_tx(d.hash).is_some() || d.nonce < self.nonce_on_path(tip, d.from) {
+            return reject("nonce too low");
+        }
+        if self.pool.iter().any(|t| t.hash == d.hash) {
+            return reject("already known");
+        }
+        let taken = self.pool.iter().any(|t| {
+            self.senders
+                .get(&t.hash)
+                .is_some_and(|s| s.from == d.from && s.nonce == d.nonce)
+        });
+        if taken {
+            return reject("replacement transaction underpriced");
+        }
+        self.senders.insert(
+            d.hash,
+            Sender {
+                from: d.from,
+                nonce: d.nonce,
+                max_fee_per_gas: d.max_fee_per_gas,
+                max_priority_fee_per_gas: d.max_priority_fee_per_gas,
+            },
+        );
+        self.pool.push(ChainTx {
+            hash: d.hash,
+            to: d.to,
+            value: d.value,
+            success: true,
+        });
+        RpcOutcome::Ok(d.hash)
+    }
+
     /// 이 조회에 걸리는 장애가 있으면 하나 쓰고 돌려준다.
     fn take_fault(&mut self, call: Call) -> Option<Fault> {
         let rule = self.rules.iter_mut().find(|r| {
@@ -212,7 +414,9 @@ impl Inner {
 
 fn outcome<T>(fault: Fault) -> RpcOutcome<T> {
     match fault {
-        Fault::Indeterminate => RpcOutcome::Indeterminate("injected timeout".into()),
+        Fault::Indeterminate | Fault::LostResponse => {
+            RpcOutcome::Indeterminate("injected timeout".into())
+        }
         Fault::Definite => RpcOutcome::Definite(RpcError("injected rejection".into())),
     }
 }
@@ -244,6 +448,62 @@ impl ChainClient for FakeChain {
             .get(number.0 as usize)
             .map(|h| g.blocks[h].clone());
         RpcOutcome::Ok(block)
+    }
+
+    async fn send_raw(&self, raw: &[u8]) -> RpcOutcome<Hash32> {
+        let mut g = self.inner();
+        g.calls += 1;
+        let fault = g.take_fault(Call::SendRaw);
+        // 연결이 끊겨 노드에 닿지 않았다
+        if fault == Some(Fault::Indeterminate) {
+            return outcome(Fault::Indeterminate);
+        }
+        g.received.push(raw.to_vec());
+        if fault == Some(Fault::Definite) {
+            return outcome(Fault::Definite);
+        }
+        let result = g.accept(raw);
+        // 반영은 했고 응답만 사라졌다
+        if fault == Some(Fault::LostResponse) {
+            return outcome(Fault::LostResponse);
+        }
+        result
+    }
+
+    async fn receipt(&self, tx: Hash32) -> RpcOutcome<Option<Receipt>> {
+        let mut g = self.inner();
+        g.calls += 1;
+        if let Some(f) = g.take_fault(Call::Receipt) {
+            return outcome(f);
+        }
+        let Some((header, t)) = g.canonical_tx(tx) else {
+            return RpcOutcome::Ok(None);
+        };
+        let price = match g.senders.get(&tx) {
+            Some(s) => s
+                .max_fee_per_gas
+                .min(g.base_fee + s.max_priority_fee_per_gas),
+            None => g.base_fee,
+        };
+        RpcOutcome::Ok(Some(Receipt {
+            block_hash: header.hash,
+            block_number: header.number,
+            success: t.success,
+            gas_used: TRANSFER_GAS,
+            effective_gas_price: price,
+        }))
+    }
+
+    async fn nonce_at(&self, address: Address, block: BlockNumber) -> RpcOutcome<u64> {
+        let mut g = self.inner();
+        g.calls += 1;
+        if let Some(f) = g.take_fault(Call::NonceAt) {
+            return outcome(f);
+        }
+        let Some(&h) = g.canonical.get(block.0 as usize) else {
+            return RpcOutcome::Definite(RpcError("header not found".into()));
+        };
+        RpcOutcome::Ok(g.nonce_on_path(h, address))
     }
 }
 

@@ -1,0 +1,2 @@
+# 재시작 때 Signed 출금에 nonce를 새로 할당해 다시 서명하는 변형(T5.3). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i5_recovery::restart_after_sign_resends_same_tx --exact

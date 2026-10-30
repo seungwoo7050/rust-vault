@@ -1,0 +1,2 @@
+# 전송 타임아웃을 Failed로 매핑하고 홀드를 푸는 변형(T6.1). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i6_external_uncertainty::send_timeout_moves_to_unknown --exact

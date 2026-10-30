@@ -1,0 +1,11 @@
+--- a/crates/vault/src/withdrawal.rs
++++ b/crates/vault/src/withdrawal.rs
+@@ -785,7 +785,7 @@ pub(crate) async fn concluded_above(
+ async fn open_withdrawals(pool: &PgPool) -> Result<VecDeque<String>> {
+     let ids: Vec<String> = sqlx::query_scalar(
+         "SELECT request_id FROM withdrawals
+-          WHERE status IN ('held', 'signed', 'sent', 'unknown', 'needs_review')
++          WHERE status IN ('held', 'signed', 'sent', 'unknown')
+           ORDER BY created_at, request_id",
+     )
+     .fetch_all(pool)

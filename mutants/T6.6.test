@@ -1,0 +1,2 @@
+# T6.4의 변형(재전송 때마다 새 nonce로 다시 서명)을 무작위 장애 열에 건다(T6.6). DB가 있어야 돈다(DATABASE_URL)
+-p vault --features db --test invariants -- i6_external_uncertainty::random_send_faults_pay_at_most_once --exact

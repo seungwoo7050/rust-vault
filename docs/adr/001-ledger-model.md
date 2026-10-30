@@ -58,7 +58,7 @@
 
 ## 검증
 
-[SYSTEM_INVARIANTS](../SYSTEM_INVARIANTS.md#증명-테스트)의 T1.1, T2.1, T2.2, T3.1, T3.2(02-ledger), T1.2(03-deposit-reorg, 결정 6의 출금 홀드 분개를 원장에 직접 기록해 잠정 입금이 사용자 계정에 없음을 본다), T5.1, T5.2(04-crash-recovery, 결정 8의 한 트랜잭션), T1.3, T2.4(05-withdrawal).
+[SYSTEM_INVARIANTS](../SYSTEM_INVARIANTS.md#증명-테스트)의 T1.1, T2.1, T2.2, T3.1, T3.2(02-ledger), T1.2(03-deposit-reorg에서 결정 6의 출금 홀드 분개를 원장에 직접 기록했고, 05에서 출금 API `request`로 바꿔 잠정 입금이 사용자 계정에 없음을 본다), T5.1, T5.2(04-crash-recovery, 결정 8의 한 트랜잭션), T1.3, T2.4(05-withdrawal).
 
 ## 바꿀 신호
 

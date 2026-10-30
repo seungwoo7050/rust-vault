@@ -1,0 +1,14 @@
+--- a/crates/vault/src/withdrawal.rs
++++ b/crates/vault/src/withdrawal.rs
+@@ -544,7 +544,10 @@ impl<C: ChainClient, S: Signer, K: Clock, F: Faults> Processor<C, S, K, F> {
+ 
+     /// 기한 안에 결론이 안 났다(ADR-003 결정 3). 홀드는 유지하고 `NeedsReview`. 자동 `Failed`는 없다(I6).
+     async fn deadline_passed(&mut self, w: &Withdrawal) -> Result<Step> {
+-        self.mark_needs_review(w).await
++        // (변형) 기한이 지나면 `Unknown`·`NeedsReview`를 `Failed`로 바꾸고 홀드를 푼다
++        let mut tx = self.pool.begin().await?;
++        ledger::post(&mut tx, release_entry(w)).await?;
++        self.finish(tx, w, w.status, Status::Failed).await
+     }
+ 
+     /// `Sent`·`Unknown` → `NeedsReview`. 이미 `NeedsReview`면 그대로 둔다(조회는 계속한다).
