@@ -1,6 +1,6 @@
 # RustVault
 
-블록체인의 불확실성(이벤트 중복·순서 변경, 체인 분기 교체 reorg, RPC 타임아웃·응답 유실, nonce 충돌, 프로세스 강제 종료·DB 일시 장애) 속에서도 사용자 자산의 이동과 회계 기록이 깨지지 않는 입출금 원장 시스템이다. 기능 나열이 아니라 **6개 시스템 불변조건(I1–I6)**, **8개 장애 시나리오(F1–F8)**, 이를 깨뜨리는 **36개 변형(mutants)**을 실제로 잡아내는 **24개 불변조건 증명 테스트(T1.1–T6.6)**와 **대사(Reconciliation)·Anvil Reorg PoC**가 결과물이다.
+블록체인의 불확실성(이벤트 중복·순서 변경, 체인 분기 교체 reorg, RPC 타임아웃·응답 유실, nonce 충돌, 프로세스 강제 종료·DB 일시 장애) 속에서도 사용자 자산의 이동과 회계 기록이 깨지지 않는 입출금 원장 시스템이다. 기능 나열이 아니라 **6개 시스템 불변조건(I1–I6)**, **8개 장애 시나리오(F1–F8)**, 이를 깨뜨리는 **37개 변형(mutants)**을 실제로 잡아내는 **24개 불변조건 증명 테스트(T1.1–T6.6)**와 **대사(Reconciliation)·Anvil Reorg PoC**가 결과물이다.
 
 - **출처: 사람 설계** — 불변조건 I1–I6, 장애 시나리오 F1–F8, [ADR-002](docs/adr/002-reorg-handling.md)의 reorg 되감기·확정 정책 선택, 워크스페이스 범위(crate 2개 `vault`·`vault-sim`, 성능 최적화·HTTP API 제외).
 - **확정: 오케스트레이터** — 판정 가능한 불변조건 문장, [ADR-001](docs/adr/001-ledger-model.md)(원장 모델)·[ADR-003](docs/adr/003-nonce-and-rpc-uncertainty.md)(출금 상태 기계·nonce·RPC 불확실성), 증명 테스트 T1.1–T6.6 및 변형(mutants) 설계, 대사(`vault::recon`) 및 [`paradigmxyz/reth` 오픈소스 비교 분석](docs/analysis/reth-reorg.md).
@@ -43,7 +43,7 @@
 | --- | --- | --- |
 | [`crates/vault`](crates/vault) | [`ledger`](crates/vault/src/ledger.rs) | 추가 전용 복식부기 원장(`post`, `balance`, `trial_balance`), 멱등 키·내용 해시 검증, savepoint 보호 |
 | | [`store`](crates/vault/src/store.rs) | Postgres 풀·마이그레이션(`0001`–`0004`), 트랜잭션 커밋 래퍼(`store::commit`), 장애 주입 경계(`Faults`), 일시 DB 오류 분류 |
-| | [`chain`](crates/vault/src/chain.rs) | `ChainClient` trait(`head`, `block_at`, `send_raw_tx`, `receipt`, `nonce_at`, `balance_at`), `RpcOutcome` 3분류 |
+| | [`chain`](crates/vault/src/chain.rs) | `ChainClient` trait(`head`, `block_by_number`, `send_raw`, `receipt`, `nonce_at`, `balance_at`), `RpcOutcome` 3분류 |
 | | [`deposit`](crates/vault/src/deposit.rs) | 끌어오기(pull) 블록 스캐너(`Scanner`): 부모 해시 체인 검증, reorg 되감기(`dep:revert`), 입금 확정(`dep:confirm`), 운영 자금 확정(`cap:fund`), 최종성 위반 정지 |
 | | [`withdrawal`](crates/vault/src/withdrawal.rs) | 출금 상태 기계(`Held → Signed → Sent/Unknown → Confirmed/Failed/NeedsReview`), 단일 트랜잭션 nonce 할당·raw tx 저장 |
 | | [`signer`](crates/vault/src/signer.rs) | EIP-1559 결정적 서명(`LocalSigner`, `alloy-consensus`) 및 raw tx 복원(`decode`) |
@@ -58,7 +58,7 @@
 | --- | --- |
 | `scripts/harness/verify.sh fast` | `cargo fmt --check`, `clippy`, 단위 테스트, 불변조건 추적표 일치(`check-invariant-tests.sh`), 가드·변형 하네스 자체 테스트(`test-guards.sh`) |
 | `scripts/harness/verify.sh full` | `fast` + Docker Compose Postgres 기동 + DB 통합 테스트(`db`, `ledger`, `deposit`, `withdrawal`, `recon`, `invariants` 24개) + (`anvil` 설치 시) `anvil` 실제 노드 Reorg PoC + 공개 경계 검사(`check-public.sh`) |
-| `scripts/harness/mutants.sh` | [`mutants/`](mutants/)의 36개 변형 패치를 임시 사본에 하나씩 적용해 모든 변형이 의도한 단언(`.expect`)으로 잡히는지 검증 (`잡힘 36 가려짐 0 기타 0`) |
+| `scripts/harness/mutants.sh` | [`mutants/`](mutants/)의 37개 변형 패치를 임시 사본에 하나씩 적용해 모든 변형이 의도한 단언(`.expect`)으로 잡히는지 검증 (`잡힘 37 가려짐 0 기타 0`) |
 | `cargo test -p vault --features "db,anvil" --test anvil` | 실제 `anvil` 프로세스를 띄워 `cap:fund` → 입금 → `evm_snapshot`/`evm_revert` reorg 되감기 → 재포함·확정 → 실제 EIP-1559 서명 출금 → `recon::reconcile` 무결성까지 검증 |
 
 ---
