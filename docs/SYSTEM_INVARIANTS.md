@@ -85,7 +85,7 @@
 | T6.3 | F5 | `i6_external_uncertainty::nonce_conflict_never_double_pays` | (가) 전송 직후 종료해 `Signed`로 남은 사이 내 tx가 채굴되고, 재시작 뒤 재전송이 "nonce too low"를 받음 (나) 외부 tx가 다음 nonce를 먼저 써서 채굴되고, 그 뒤 우리 출금이 같은 nonce로 서명됨. 단언: (가) 지급 1회, `Confirmed` (나) `NeedsReview`, 홀드 유지, 우리 지급 0회 | "nonce too low"에서 새 nonce로 다시 서명((가)에서 이중 지급, (나)에서 `NeedsReview`가 아님) | 외부 선점만 넣으면 우리 지급이 1회로 남는다(그래서 (가)를 넣는다). 외부 tx가 멤풀에만 있으면 거절이 "replacement underpriced"라 변형이 안 걸린다(그래서 (나)는 외부 tx를 채굴한 뒤 서명하게 한다) | 05-withdrawal |
 | T6.4 | F6 | `i6_external_uncertainty::resend_uses_identical_raw_tx` | 첫 전송은 반영하고 응답만 버린 뒤 `Unknown`에서 여러 번 재전송. 단언: 노드가 받은 raw tx가 모두 저장본과 같고 지급 1회 | 재전송 때마다 nonce를 새로 할당해 다시 서명 | 결정적 서명(T5.3과 같다) | 05-withdrawal |
 | T6.5 | F4 | `i6_external_uncertainty::read_timeout_never_skips_block` | 블록 조회 타임아웃·빈 응답을 입금 블록에 주입. 단언: 커서가 그 블록 앞에 머물고, 조회가 회복되면 입금이 한 번 반영되고, 역분개 0개 | 조회 실패 블록을 빈 블록으로 보고 커서 전진 | 없음 | 03-deposit-reorg |
-| T6.6 | F3, F4, F5, F6 | `i6_external_uncertainty::random_send_faults_pay_at_most_once` | 응답 유실·타임아웃·nonce 충돌·재시작을 무작위로 섞은 출금 열(proptest). 출금 요청마다 체인 지급 수 ≤ 1, 원장 출금액 = 체인 지급액 | T6.1, T6.3, T6.4의 변형 중 어느 하나(`mutants/T6.6`은 T6.4의 변형) | T6.1·T6.3·T6.4 행 참조. 끝의 마무리 처리가 채굴 전에 조회 루틴을 돌려 재전송이 언제나 일어난다 | 05-withdrawal |
+| T6.6 | F3, F4, F5, F6 | `i6_external_uncertainty::random_send_faults_pay_at_most_once` | 응답 유실·타임아웃·nonce 충돌·재시작(전송 직후 종료한 사이 내 tx가 채굴된 뒤의 재전송 포함)을 무작위로 섞은 출금 열(proptest)과 고정 경우 둘(출금 커밋 직후 종료 뒤 다음 출금, 전송 직후 종료 뒤 채굴·재전송). 장애 없는 마무리 뒤 출금 요청마다 체인 지급 수 ≤ 1, 원장 출금액 = 체인 지급액, 모든 출금이 결론 상태(`Rejected`·`Confirmed`·`Failed`, 또는 내 tx가 체인에 없고 주소 nonce가 내 nonce를 지난 `NeedsReview`) | T6.1, T6.3, T6.4의 변형 중 어느 하나(`mutants/T6.6`은 T6.4의 변형) | T6.1·T6.3·T6.4 행 참조. 끝의 마무리 처리가 채굴 전에 조회 루틴을 돌려 재전송이 언제나 일어난다 | 05-withdrawal |
 
 ## 바꾸는 법
 

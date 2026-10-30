@@ -6,7 +6,7 @@ use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::test_runner::{TestCaseError, TestRunner};
 
-use vault::chain::BlockNumber;
+use vault::chain::{BlockNumber, ChainClient, RpcOutcome};
 use vault::deposit::ScanError;
 use vault::ledger::AccountKey;
 use vault::store::{FaultPoint, Injected, Site};
@@ -269,6 +269,24 @@ async fn read_timeout_never_skips_block() {
 #[test]
 fn random_send_faults_pay_at_most_once() {
     let rt = model::runtime();
+    // 고정 경우 둘을 먼저 돈다. 무작위 열에 언제나 나온다고 볼 수 없는 두 경로다
+    // - 출금 커밋 직후 종료 뒤 재시작(nonce 할당과 서명 tx 저장이 한 트랜잭션인지)
+    // - 전송 직후 종료한 사이 내 tx가 채굴되고 재시작 뒤 재전송이 "nonce too low"를 받음
+    let fixed = [
+        vec![
+            Op::Request(10),
+            Op::CrashAfterCommit,
+            Op::Process,
+            Op::Request(20),
+            Op::Process,
+        ],
+        vec![Op::Request(10), Op::CrashSendMine, Op::Process],
+    ];
+    for ops in fixed {
+        if let Err(e) = rt.block_on(pay_at_most_once(ops.clone())) {
+            panic!("고정 경우 {ops:?}: {e}");
+        }
+    }
     let mut runner = TestRunner::new(model::config(24));
     runner
         .run(&vec(op(), 1..24), |ops| {
@@ -301,6 +319,8 @@ enum Op {
     External,
     /// 다음 전송 직후 종료
     CrashAfterSend,
+    /// 다음 전송 직후 종료하고, 재시작 전에 블록 N개를 캔다(내 tx가 채굴된 뒤 같은 바이트 재전송 → "nonce too low")
+    CrashSendMine,
     /// 다음 출금 커밋 직후 종료
     CrashAfterCommit,
     /// 다음 출금 커밋 직전 종료
@@ -321,6 +341,7 @@ fn op() -> impl Strategy<Value = Op> {
         1 => Just(Op::NonceTimeout),
         1 => Just(Op::External),
         1 => Just(Op::CrashAfterSend),
+        1 => Just(Op::CrashSendMine),
         1 => Just(Op::CrashAfterCommit),
         1 => Just(Op::CrashBeforeCommit),
         1 => Just(Op::PastDeadline),
@@ -370,6 +391,19 @@ async fn drive(w: &WEnv, ops: &[Op]) -> Result<(), String> {
                 .env
                 .faults
                 .fail_next(FaultPoint::AfterSend, 1, Injected::Crash),
+            Op::CrashSendMine => {
+                w.env
+                    .faults
+                    .fail_next(FaultPoint::AfterSend, 1, Injected::Crash);
+                match p.run_until_idle().await {
+                    Ok(()) => {}
+                    Err(WithdrawalError::Crashed(_)) => {
+                        w.mine(scan::N as usize).await;
+                        p = w.processor().await;
+                    }
+                    Err(e) => return Err(format!("{op:?}: {e}")),
+                }
+            }
             Op::CrashAfterCommit => w.env.faults.fail_next(
                 FaultPoint::AfterCommit(Site::Withdrawal),
                 1,
@@ -385,7 +419,9 @@ async fn drive(w: &WEnv, ops: &[Op]) -> Result<(), String> {
                 .advance(withdraw::REVIEW_AFTER + Duration::from_secs(1)),
         }
     }
-    // 끝: 장애 없이 블록을 캐고 처리해 들어갈 수 있는 tx는 모두 확정 수 N에 이르게 한다
+    // 끝: 걸어 두고 아직 쓰이지 않은 장애를 비운 뒤 블록을 캐고 처리해 들어갈 수 있는 tx는 모두 확정 수 N에 이르게 한다
+    chain.clear_faults();
+    w.env.faults.clear();
     for _ in 0..(scan::N as usize + 2) {
         withdraw::run_restarting(w, &mut p)
             .await
@@ -395,6 +431,30 @@ async fn drive(w: &WEnv, ops: &[Op]) -> Result<(), String> {
     withdraw::run_restarting(w, &mut p)
         .await
         .map_err(|e| format!("마무리: {e}"))?;
+
+    // 마무리 뒤 모든 출금이 결론 상태다. `NeedsReview`는 근거가 있을 때만: 내 tx가 체인에 없고
+    // 출금 주소의 nonce가 내 nonce를 지났다(다른 tx가 그 nonce를 썼다)
+    let tip = chain.tip().number;
+    let RpcOutcome::Ok(used) = chain.nonce_at(withdraw::hot(), tip).await else {
+        return Err("출금 주소 nonce를 못 읽었다".into());
+    };
+    for n in 1..=requests {
+        let id = format!("t6.6-{n}");
+        let status = w.status(&id).await;
+        match status {
+            Status::Rejected | Status::Confirmed | Status::Failed => {}
+            Status::NeedsReview => {
+                let st = w.stored(&id).await;
+                if !w.payments_to(withdraw::recipient(n)).is_empty() || used <= st.nonce {
+                    return Err(format!(
+                        "출금 {n}: 근거 없는 NeedsReview(nonce {}, 주소 nonce {used})",
+                        st.nonce
+                    ));
+                }
+            }
+            _ => return Err(format!("출금 {n}: 마무리 뒤에도 결론이 없다({status})")),
+        }
+    }
 
     let mut paid = 0i128;
     for n in 1..=requests {

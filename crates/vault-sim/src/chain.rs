@@ -221,6 +221,13 @@ impl FakeChain {
         });
     }
 
+    /// 걸어 두고 아직 쓰이지 않은 조회·전송 장애를 모두 지운다.
+    pub fn clear_faults(&self) {
+        let mut g = self.inner();
+        g.rules.clear();
+        g.nones.clear();
+    }
+
     /// 다음 `n`번의 `number` 블록 조회에 `Ok(None)`("아직 없음")을 돌려준다. head는 그대로다.
     pub fn none_at(&self, number: BlockNumber, n: usize) {
         *self.inner().nones.entry(number).or_default() += n;

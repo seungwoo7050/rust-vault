@@ -1,0 +1,17 @@
+--- a/crates/vault/src/withdrawal.rs
++++ b/crates/vault/src/withdrawal.rs
+@@ -454,6 +454,14 @@ impl<C: ChainClient, S: Signer, K: Clock, F: Faults> Processor<C, S, K, F> {
+         // 응답을 받고 상태를 쓰기 전에 죽으면 `Signed`로 남는다. 재시작이 같은 바이트를 다시 보내고
+         // 노드는 "already known"이나 "nonce too low"를 돌려준다(결정 7, T5.3)
+         self.inject(FaultPoint::AfterSend)?;
++        // (변형) "nonce too low"를 실패로 보고 홀드를 푼다
++        if let RpcOutcome::Definite(e) = &outcome
++            && e.send_rejection() == SendRejection::NonceTooLow
++        {
++            let mut tx = self.pool.begin().await?;
++            ledger::post(&mut tx, release_entry(w)).await?;
++            return self.finish(tx, w, Status::Signed, Status::Failed).await;
++        }
+         let to = status_after_send(&outcome);
+         let tx = self.pool.begin().await?;
+         self.finish(tx, w, Status::Signed, to).await

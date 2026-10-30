@@ -57,6 +57,11 @@ impl FaultPlan {
     pub fn hits(&self) -> BTreeMap<FaultPoint, usize> {
         self.0.lock().unwrap().hits.clone()
     }
+
+    /// 걸어 두고 아직 통과하지 않은 장애를 지운다. 통과 횟수·발생 횟수는 유지한다.
+    pub fn clear(&self) {
+        self.0.lock().unwrap().at.clear();
+    }
 }
 
 impl Faults for FaultPlan {
