@@ -12,8 +12,8 @@
   },
   "current": {
     "branch": "05-withdrawal",
-    "stage": "brief",
-    "note": "04 완료(33479db). 다음: 05 브리프. 04 devlog 서브에이전트 진행 중"
+    "stage": "implement",
+    "note": "브리프 briefs/05-withdrawal.md 확정. 구현 worktree ../rust-vault-05-withdrawal(04 @ 33479db에서)"
   },
   "branches": {
     "00-charter": {
