@@ -1,19 +1,19 @@
 {
-  "updated": "2026-10-30",
+  "updated": "2026-10-31",
   "start_point": {
     "branch": "main",
     "commit": "6b4a912"
   },
   "baseline": {
-    "commit": "33479db",
-    "note": "04 끝. 05의 시작 기준점",
-    "verify": "fmt ✓ clippy ✓ test 5/5 db 31/31 ignored 8 invariants ✓ guards ✓ public ✓ (메인 실행)",
+    "commit": "a5cb30f",
+    "note": "05 끝. 06의 시작 기준점",
+    "verify": "fmt ✓ clippy ✓ test 9/9 db 43/43 ignored 0 invariants ✓ guards ✓ public ✓ (메인 실행)",
     "tools": "cargo 1.97.1, anvil 1.8.7(~/.foundry/bin, PATH에 없을 수 있음), docker"
   },
   "current": {
-    "branch": "05-withdrawal",
+    "branch": "06-recon-analysis",
     "stage": "implement",
-    "note": "브리프 briefs/05-withdrawal.md 확정. 구현 worktree ../rust-vault-05-withdrawal(04 @ 33479db에서)"
+    "note": "브리프 briefs/06-recon-analysis.md 확정. 구현 worktree ../rust-vault-06-recon-analysis(05 @ a5cb30f에서)"
   },
   "branches": {
     "00-charter": {
@@ -111,6 +111,29 @@
       "mutants": "잡힘 22 가려짐 0 기타 0 (메인 실행)",
       "docs": "devlog 완료(공개 저장소 밖)",
       "done": "2026-10-30"
+    },
+    "05-withdrawal": {
+      "commits": "04-crash-recovery..a5cb30f",
+      "head": "a5cb30f",
+      "worktree": "../rust-vault-05-withdrawal",
+      "proved": [
+        "T1.2",
+        "T1.3",
+        "T2.4",
+        "T5.3",
+        "T6.1",
+        "T6.2",
+        "T6.3",
+        "T6.4",
+        "T6.6"
+      ],
+      "eval": [
+        "1차 통과(기준 1–5, 04 T5.1 변형 패치도 15b59ae에서 수정), 테스트·변형 공백 2건(T5.3 변형이 nonce 공백으로 체인 지급 수 0 != 1에서 먼저 실패, T6.6 끝 결론 상태 단언 부재 및 WD-NONCE-SPLIT·WD-NONCE-TOO-LOW-FAILED 변형 추가, 마무리 전 미소진 장애 비우기) → 보강(6c985cd, a5cb30f)"
+      ],
+      "verify": "fmt ✓ clippy ✓ test 9/9 db 43/43 ignored 0 invariants ✓ guards ✓ public ✓ (메인 실행)",
+      "mutants": "잡힘 34 가려짐 0 기타 0 (메인 실행)",
+      "docs": "devlog 완료(공개 저장소 밖)",
+      "done": "2026-10-31"
     }
   },
   "blocked": [
