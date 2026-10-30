@@ -58,6 +58,7 @@ impl Env {
             confirmations: N,
             start: self.chain.genesis(),
             transient_retries: RETRIES,
+            hot_wallet: None,
         }
     }
 

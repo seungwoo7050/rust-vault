@@ -35,6 +35,8 @@ pub enum Call {
     Receipt,
     /// 계정 nonce 조회
     NonceAt,
+    /// 계정 잔액 조회
+    BalanceAt,
 }
 
 /// 넣을 장애.
@@ -84,6 +86,8 @@ struct Inner {
     /// 이 수취인에게 가는 계정 tx는 실행이 실패한다(status 0, 가스비는 낸다)
     reverts: HashSet<Address>,
     base_fee: u128,
+    /// 대사 불일치 주입용 주소별 온체인 잔액 보정값
+    balance_adjustments: HashMap<Address, i128>,
 }
 
 /// 가짜 체인 핸들.
@@ -127,6 +131,7 @@ impl FakeChain {
             received: vec![],
             reverts: HashSet::new(),
             base_fee: BASE_FEE,
+            balance_adjustments: HashMap::new(),
         })))
     }
 
@@ -253,6 +258,11 @@ impl FakeChain {
         self.inner().reverts.insert(to);
     }
 
+    /// 대사 불일치 주입용으로 주소의 온체인 잔액에 보정값(`delta`)을 더한다.
+    pub fn adjust_balance(&self, address: Address, delta: i128) {
+        *self.inner().balance_adjustments.entry(address).or_default() += delta;
+    }
+
     /// 이 시스템 밖에서 같은 키로 보낸 tx를 멤풀에 넣는다(F5). 해시는 (from, nonce, to, value)로 정해진다.
     pub fn external_send(&self, from: Address, nonce: u64, to: Address, value: u128) -> Hash32 {
         let mut h = Sha256::new();
@@ -330,6 +340,32 @@ impl Inner {
             .flat_map(|h| self.blocks[h].txs.iter())
             .filter(|t| self.senders.get(&t.hash).is_some_and(|s| s.from == from))
             .count() as u64
+    }
+
+    /// `tip`까지의 경로에서 `address`의 코인 잔액(받은 코인 − 보낸 코인·가스비 + 보정값, 최소 0).
+    fn balance_on_path(&self, tip: Hash32, address: Address) -> u128 {
+        let mut bal: i128 = 0;
+        for h in self.path_to(tip) {
+            for t in &self.blocks[&h].txs {
+                if t.success && t.to == address {
+                    bal = bal.saturating_add(t.value as i128);
+                }
+                if let Some(s) = self.senders.get(&t.hash)
+                    && s.from == address
+                {
+                    let price = s
+                        .max_fee_per_gas
+                        .min(self.base_fee + s.max_priority_fee_per_gas);
+                    let fee = u128::from(TRANSFER_GAS) * price;
+                    let spent = if t.success { t.value + fee } else { fee };
+                    bal = bal.saturating_sub(spent as i128);
+                }
+            }
+        }
+        if let Some(&delta) = self.balance_adjustments.get(&address) {
+            bal = bal.saturating_add(delta);
+        }
+        bal.max(0) as u128
     }
 
     /// 멤풀에서 `parent` 다음 블록에 들어갈 tx를 꺼내 `txs` 뒤에 붙인다. 실행 실패 수취인이면 status 0이다.
@@ -505,6 +541,18 @@ impl ChainClient for FakeChain {
         };
         RpcOutcome::Ok(g.nonce_on_path(h, address))
     }
+
+    async fn balance_at(&self, address: Address, block: BlockNumber) -> RpcOutcome<u128> {
+        let mut g = self.inner();
+        g.calls += 1;
+        if let Some(f) = g.take_fault(Call::BalanceAt) {
+            return outcome(f);
+        }
+        let Some(&h) = g.canonical.get(block.0 as usize) else {
+            return RpcOutcome::Definite(RpcError("header not found".into()));
+        };
+        RpcOutcome::Ok(g.balance_on_path(h, address))
+    }
 }
 
 fn block_hash(parent: Hash32, number: u64, salt: u64) -> Hash32 {
@@ -561,5 +609,25 @@ pub fn shuffle<T>(items: &mut [T], seed: u64) {
     for i in (1..items.len()).rev() {
         let j = (next() % (i as u64 + 1)) as usize;
         items.swap(i, j);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn balance_at_tracks_incoming_and_adjustments() {
+        let chain = FakeChain::new();
+        let addr = address(7);
+        let g = chain.genesis().hash;
+        let b1 = chain.mine_canonical(
+            g,
+            vec![transfer(1, addr, 1_000), failed_transfer(2, addr, 500)],
+        );
+        assert_eq!(chain.inner().balance_on_path(g, addr), 0);
+        assert_eq!(chain.inner().balance_on_path(b1, addr), 1_000);
+        chain.adjust_balance(addr, -250);
+        assert_eq!(chain.inner().balance_on_path(b1, addr), 750);
     }
 }

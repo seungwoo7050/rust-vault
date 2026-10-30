@@ -4,6 +4,7 @@ pub mod chain;
 pub mod clock;
 pub mod deposit;
 pub mod ledger;
+pub mod recon;
 pub mod signer;
 pub mod store;
 pub mod withdrawal;
