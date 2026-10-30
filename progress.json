@@ -5,15 +5,15 @@
     "commit": "6b4a912"
   },
   "baseline": {
-    "commit": "4b14e37",
-    "note": "02-ledger 끝. 03의 시작 기준점",
-    "verify": "fmt ✓ clippy ✓ test 4/4 db 11/11 ignored 19 invariants ✓ guards ✓ public ✓ (메인 실행)",
+    "commit": "dfc5630",
+    "note": "03 끝. 04의 시작 기준점",
+    "verify": "fmt ✓ clippy ✓ test 5/5 db 25/25 ignored 10 invariants ✓ guards ✓ public ✓ (메인 실행)",
     "tools": "cargo 1.97.1, anvil 1.8.7(~/.foundry/bin, PATH에 없을 수 있음), docker"
   },
   "current": {
     "branch": "03-deposit-reorg",
-    "stage": "implement",
-    "note": "브리프 briefs/03-deposit-reorg.md 확정. 구현 worktree ../rust-vault-03-deposit-reorg(02-ledger @ 4b14e37에서). 끝나면 guide(D 모드) 대상"
+    "stage": "docs",
+    "note": "구현·평가·확인 끝(dfc5630). guide(D 모드)와 devlog 서브에이전트 진행 중. 끝나면 04-crash-recovery 브리프"
   },
   "branches": {
     "00-charter": {
@@ -72,6 +72,28 @@
       "verify": "fmt ✓ clippy ✓ test 4/4 db 11/11 ignored 19 invariants ✓ guards ✓ public ✓ (메인 실행)",
       "mutants": "잡힘 6 가려짐 0 기타 0 (메인 실행)",
       "done": "2026-10-30"
+    },
+    "03-deposit-reorg": {
+      "commits": "02-ledger..dfc5630",
+      "head": "dfc5630",
+      "worktree": "../rust-vault-03-deposit-reorg",
+      "proved": [
+        "T1.2",
+        "T2.3",
+        "T3.3",
+        "T4.1",
+        "T4.2",
+        "T4.3",
+        "T4.4",
+        "T4.5",
+        "T6.5"
+      ],
+      "eval": [
+        "1차 통과(기준 1–5, 표 밖 변형 4개 잡힘 또는 동치), A→B→A 정지가 입금 없는 flip-flop에서도 멈추는 가용성 결함 → 정지 범위를 좁히고 변형 2개 추가(8ed4e7f, dfc5630)"
+      ],
+      "verify": "fmt ✓ clippy ✓ test 5/5 db 25/25 ignored 10 invariants ✓ guards ✓ public ✓ (메인 실행)",
+      "mutants": "잡힘 18 가려짐 0 기타 0 (메인 실행)",
+      "docs": "guide·devlog 진행 중(공개 저장소 밖)"
     }
   },
   "blocked": [
@@ -96,6 +118,7 @@
     "stop.sh의 STOP_VERIFY_CMD 환경 변수 덮어쓰기: 테스트용이지만 훅 환경에서 설정되면 Stop 검증을 바꿀 수 있다. 오용 사례가 나오면 테스트 전용 경로로 좁힌다",
     "컴포즈 호스트 포트 55433(5433은 다른 프로젝트가 사용)",
     "02-ledger guide(ROADMAP \"여유 있으면\"): 03 guide를 먼저 한다",
-    "02 원장: 계정 잠금을 FOR UPDATE로 되돌려도 테스트가 통과한다. FK의 KEY SHARE와의 교착(수동 psql로 재현됨)은 안전성이 아닌 가용성 문제라 지금은 테스트 없음. 05의 동시 출금 부하에서 교착 오류가 나오면 교착 재현 테스트를 더한다"
+    "02 원장: 계정 잠금을 FOR UPDATE로 되돌려도 테스트가 통과한다. FK의 KEY SHARE와의 교착(수동 psql로 재현됨)은 안전성이 아닌 가용성 문제라 지금은 테스트 없음. 05의 동시 출금 부하에서 교착 오류가 나오면 교착 재현 테스트를 더한다",
+    "ADR-001 잠정 입금 키의 A→B→A 한계: 같은 (tx, 블록 해시)가 두 번 잠정 기록될 수 없어 reverted 입금이 있는 블록이 다시 canonical이 되면 정지한다. 실제로 일어나면 키에 포함 회차(DB에서 결정적으로 계산)를 넣는 방식을 검토"
   ]
 }
