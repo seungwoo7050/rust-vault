@@ -14,7 +14,13 @@
     "note": "다음 세션: 0절 루틴 → 00-charter 브리프 확정 → 문서 작성 → 평가"
   },
   "branches": {},
-  "blocked": [],
+  "blocked": [
+    {
+      "branch": "06-recon-analysis",
+      "what": "anvil(Foundry) 설치와 실제 노드 reorg PoC",
+      "why": "세션에서 외부 설치 스크립트 실행이 권한으로 막힘. 사람이 직접 설치한다(foundryup). 그 전까지 가짜 체인으로 검증한다"
+    }
+  ],
   "push_policy": "로컬 커밋만. 원격 저장소 생성과 푸시는 사람에게 묻는다.",
   "needs_human": [],
   "harness_gaps": [],
