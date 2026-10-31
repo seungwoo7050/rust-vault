@@ -11,9 +11,9 @@
     "tools": "cargo 1.97.1, anvil 1.8.7(~/.foundry/bin), docker"
   },
   "current": {
-    "branch": "06-recon-analysis",
-    "stage": "done",
-    "note": "로드맵 전체 브랜치(00-charter ~ 06-recon-analysis) 완료"
+    "branch": "07-threat-model",
+    "stage": "brief",
+    "note": "2단계(07~10) 시작 전. briefs/07-threat-model.md 확정(오케스트레이터). 다음 세션: baseline에서 verify full 후 07 문서 작성"
   },
   "branches": {
     "00-charter": {
@@ -156,12 +156,12 @@
   },
   "blocked": [
     {
-      "what": "CI 실제 실행(.github/workflows/verify.yml)",
-      "why": "원격 저장소 없음. 생성·푸시는 사람에게 묻는다"
-    },
-    {
       "what": "rust-toolchain.toml 적용 확인",
       "why": "로컬 cargo가 Homebrew 것이라 rustup 툴체인 파일이 적용되지 않는다. CI에서만 확인 가능"
+    },
+    {
+      "what": "CI 실제 실행 결과(.github/workflows/verify.yml)",
+      "why": "원격 저장소와 브랜치는 이미 있다(사람이 푸시). 실행 결과 확인은 다음 세션에서 gh가 있으면 보고, 없으면 사람에게 묻는다"
     }
   ],
   "push_policy": "로컬 커밋만. 원격 저장소 생성과 푸시는 사람에게 묻는다.",
@@ -179,5 +179,22 @@
     "02-ledger guide(ROADMAP \"여유 있으면\"): 03 guide를 먼저 한다",
     "02 원장: 계정 잠금을 FOR UPDATE로 되돌려도 테스트가 통과한다. FK의 KEY SHARE와의 교착(수동 psql로 재현됨)은 안전성이 아닌 가용성 문제라 지금은 테스트 없음. 05의 동시 출금 부하에서 교착 오류가 나오면 교착 재현 테스트를 더한다",
     "ADR-001 잠정 입금 키의 A→B→A 한계: 같은 (tx, 블록 해시)가 두 번 잠정 기록될 수 없어 reverted 입금이 있는 블록이 다시 canonical이 되면 정지한다. 실제로 일어나면 키에 포함 회차(DB에서 결정적으로 계산)를 넣는 방식을 검토"
+  ],
+  "phase2": {
+    "roadmap": "ROADMAP.md 2단계 절",
+    "branches": [
+      "07-threat-model",
+      "08-withdrawal-authz",
+      "09-audit-trail",
+      "10-risk-oracle"
+    ],
+    "invariants": "I7–I9 확정: 오케스트레이터(사람이 맡김). I1–I6 불변",
+    "start_point": {
+      "branch": "main",
+      "commit": "efef733"
+    }
+  },
+  "push_exceptions": [
+    "2026-10-31 2단계 설계: 사람이 명시 승인. ai-work 브랜치만(rust-vault, 비공개 저장소), force 없음"
   ]
 }
